@@ -322,3 +322,65 @@ body {
   border-radius: 12px !important;
   object-fit: cover !important;
 }
+/* --- 📱 RESPONSIVE MOBILE SIDEBAR LOGIC --- */
+
+/* 1. Hide Hamburger on Desktop */
+.hamburger {
+  display: none;
+  background: none;
+  border: none;
+  color: var(--knust-blue);
+  cursor: pointer;
+  padding: 10px 0;
+  margin-right: 15px;
+}
+
+/* 2. Mobile Specific Styles (Screens smaller than 768px) */
+@media (max-width: 768px) {
+  .hamburger {
+    display: block; /* Show hamburger on mobile */
+  }
+
+  .sidebar {
+    position: fixed;
+    left: -100%; /* Hide sidebar off-screen */
+    top: 0;
+    height: 100vh;
+    z-index: 1000;
+    transition: 0.3s ease-in-out;
+    width: 280px;
+    box-shadow: 10px 0 30px rgba(0,0,0,0.3);
+    overflow-y: auto; /* Allows scrolling if the screen is short */
+    padding-bottom: 40px;
+  }
+
+  .sidebar button{
+    display: flex;
+  }
+
+  /* When the 'open' class is added via React state */
+  .sidebar.open {
+    left: 0; 
+  }
+
+  .main-content {
+    padding: 20px;
+  }
+
+  .hide-mobile {
+    display: none; /* Helper class to hide less important columns */
+  }
+}
+
+/* Helper for the X button inside the sidebar */
+.mobile-close-btn {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  .mobile-close-btn {
+    display: block;
+    cursor: pointer;
+    color: white;
+  }
+}

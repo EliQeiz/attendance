@@ -1,76 +1,85 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import Scanner from './Scanner';
-import { Search, Download, ArrowLeft, PlusSquare, LogOut, CheckCircle } from 'lucide-react';
+// Ensure Menu and X are imported
+import { Search, Download, LogOut, Menu, X } from 'lucide-react'; 
 import { Parser } from '@json2csv/plainjs';
+// 🟢 Firebase Additions (Connecting to the cloud)
+import { db } from '../firebase'; 
+import { collection, query, where, onSnapshot, addDoc, setDoc, doc } from "firebase/firestore";
 
 export default function LecturerDashboard({ user, onLogout }) {
-  const [courses, setCourses] = useState(() => JSON.parse(localStorage.getItem(`courses_${user.id}`)) || []);
-  const [attendance, setAttendance] = useState(() => JSON.parse(localStorage.getItem(`attendance_${user.id}`)) || {});
+  // 🟢 State now initializes empty and fills from Firebase cloud
+  const [courses, setCourses] = useState([]);
+  const [attendance, setAttendance] = useState({});
   const [activeCourse, setActiveCourse] = useState(null);
   const [currentWeek, setCurrentWeek] = useState(1);
   const [isScanning, setIsScanning] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
+  
+  // 🟢 Sidebar State Restored
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
-  useEffect(() => { localStorage.setItem(`courses_${user.id}`, JSON.stringify(courses)); }, [courses, user.id]);
-  useEffect(() => { localStorage.setItem(`attendance_${user.id}`, JSON.stringify(attendance)); }, [attendance, user.id]);
+  // 🟢 1. Load Courses from Firebase (Real-time)
+  useEffect(() => {
+    if (!user?.id) return;
+    const q = query(collection(db, "courses"), where("lecturerId", "==", user.id));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      setCourses(snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id })));
+    });
+    return () => unsubscribe();
+  }, [user.id]);
 
-  const addCourse = (e) => {
+  // 🟢 2. Load Attendance from Firebase (Real-time)
+  useEffect(() => {
+    if (!activeCourse) return;
+    const sessionKey = `${activeCourse.code}-W${currentWeek}`;
+    const q = query(collection(db, "attendance", sessionKey, "records"));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      setAttendance(prev => ({
+        ...prev,
+        [sessionKey]: snapshot.docs.map(doc => doc.data())
+      }));
+    });
+    return () => unsubscribe();
+  }, [activeCourse, currentWeek]);
+
+  // 🟢 3. Add Course to Cloud
+  const addCourse = async (e) => {
     e.preventDefault();
-    setCourses([...courses, { name: e.target.cn.value, code: e.target.cc.value, id: Date.now() }]);
+    await addDoc(collection(db, "courses"), {
+      name: e.target.cn.value,
+      code: e.target.cc.value,
+      lecturerId: user.id,
+      createdAt: new Date()
+    });
     e.target.reset();
   };
 
-  // 🛠️ FIXED: CONTINUOUS SCANNING & FULL NAME PARSING
-  const handleScanSuccess = useCallback((rawResult) => {
+  // 🟢 4. Handle Scan and Save to Cloud
+  const handleScanSuccess = useCallback(async (rawResult) => {
     if (!activeCourse) return;
-    
     const sessionKey = `${activeCourse.code}-W${currentWeek}`;
-
-    // 1. Robust Data Extraction
     const idMatch = rawResult.match(/(\d{7,10})/); 
     const extractedID = idMatch ? idMatch[1] : "Unknown ID";
     
-    // Clean Name: Remove "Name:", "ID:", and the ID numbers themselves
-    const cleanedName = rawResult
-      .replace(/Name:/gi, "")
-      .replace(/ID:\s*\d+/gi, "")
-      .replace(extractedID, "")
-      .replace(/[:]/g, "")
-      .trim();
-
+    const cleanedName = rawResult.replace(/Name:/gi, "").replace(/ID:\s*\d+/gi, "").replace(extractedID, "").replace(/[:]/g, "").trim();
     const extractedName = cleanedName || "Student " + extractedID;
 
-    // 2. State Update without re-mounting the Scanner
-    setAttendance(prevAttendance => {
-      const currentSessionList = prevAttendance[sessionKey] || [];
-      
-      // Prevent duplicate scan processing
-      if (currentSessionList.some(s => s.studentID === extractedID)) {
-        return prevAttendance; 
-      }
-
-      const newEntry = { 
-        studentID: extractedID, 
-        fullName: extractedName, 
-        timeVerified: new Date().toLocaleTimeString(),
-        status: "Verified"
-      };
-
-      return {
-        ...prevAttendance,
-        [sessionKey]: [...currentSessionList, newEntry]
-      };
+    // Save student to the cloud specifically for this course and week
+    const docRef = doc(db, "attendance", sessionKey, "records", extractedID);
+    await setDoc(docRef, {
+      studentID: extractedID,
+      fullName: extractedName,
+      timeVerified: new Date().toLocaleTimeString(),
+      status: "Verified",
+      timestamp: new Date()
     });
-    
-    // Notice: We NEVER call setIsScanning(false) here. 
-    // The camera will remain active for the next student.
   }, [activeCourse, currentWeek]);
 
   const downloadCSV = () => {
     const sessionKey = `${activeCourse.code}-W${currentWeek}`;
     const data = attendance[sessionKey] || [];
     if (!data.length) return alert("No records found.");
-
     try {
       const parser = new Parser({ fields: ['studentID', 'fullName', 'timeVerified', 'status'] });
       const csv = parser.parse(data);
@@ -84,29 +93,65 @@ export default function LecturerDashboard({ user, onLogout }) {
 
   return (
     <div className="dashboard-layout">
-      {/* Sidebar and rest of UI remain identical to your working version */}
-      <aside className="sidebar">
-        <img src="https://images.seeklogo.com/logo-png/35/2/kwame-nkrumah-university-of-science-technology-logo-png_seeklogo-350387.png" className="sidebar-logo" alt="KNUST" />
-        <div style={{background: 'rgba(255,255,255,0.1)', padding: '15px', borderRadius: '12px', marginTop: '20px', marginBottom: 'auto'}}>
-          <p style={{fontSize: '0.7rem', opacity: 0.7}}>LOGGED IN AS</p>
-          <p><strong>{user.name}</strong></p>
-          <p style={{fontSize: '0.8rem', opacity: 0.8}}>ID: {user.id}</p>
-        </div>
-        <button onClick={onLogout} style={{background: '#be123c', color: 'white', border: 'none', padding: '12px', borderRadius: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', marginTop: '20px'}}>
-          <LogOut size={18}/> Logout
-        </button>
-      </aside>
+      {/* 🟢 Sidebar now toggles the 'open' class */}
+      <aside className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
+  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+    <img src="https://images.seeklogo.com/logo-png/35/2/kwame-nkrumah-university-of-science-technology-logo-png_seeklogo-350387.png" className="sidebar-logo" alt="KNUST" style={{ width: '80px' }} />
+    <X className="mobile-close-btn" onClick={() => setSidebarOpen(false)} />
+  </div>
+
+  {/* User Info Box */}
+  <div style={{ background: 'rgba(255,255,255,0.1)', padding: '15px', borderRadius: '12px', marginBottom: '20px' }}>
+    <p style={{ fontSize: '0.7rem', opacity: 0.7 }}>LOGGED IN AS</p>
+    <p><strong>{user.name}</strong></p>
+    <p style={{ fontSize: '0.8rem', opacity: 0.8 }}>ID: {user.id}</p>
+  </div>
+
+  {/* 🟢 Navigation/Spacer 🟢 */}
+  <div style={{ flexGrow: 1 }}>
+    {/* You can add future menu links here */}
+  </div>
+
+  {/* Logout Button - Now guaranteed to be visible or scrollable */}
+  <button 
+    onClick={onLogout} 
+    style={{
+      background: '#be123c', 
+      color: 'white', 
+      border: 'none', 
+      padding: '14px', 
+      borderRadius: '12px', 
+      cursor: 'pointer', 
+      display: 'flex', 
+      alignItems: 'center', 
+      justifyContent: 'center', 
+      gap: '8px',
+      width: '100%',
+      marginTop: 'auto', // Pushes to bottom on desktop
+      marginBottom: '50px' // Safety margin for mobile
+    }}
+  >
+    <LogOut size={18} /> Logout
+  </button>
+</aside>
 
       <main className="main-content">
+        {/* 🟢 Hamburger Menu Button */}
+        <div style={{display: 'flex', alignItems: 'center', marginBottom: '10px'}}>
+            <button className="hamburger" onClick={() => setSidebarOpen(true)}>
+                <Menu size={28} />
+            </button>
+            {activeCourse && <button onClick={() => setActiveCourse(null)} style={{background:'none', border:'none', cursor:'pointer', color:'#64748b'}}>← Back</button>}
+        </div>
+
         {!activeCourse ? (
           <div className="hub">
-             {/* Hub Content */}
-             <h2 style={{color: '#003366', marginBottom: '25px'}}>Academic Hub</h2>
+            <h2 style={{color: '#003366', marginBottom: '25px'}}>Academic Hub</h2>
             <div className="table-card">
-              <form onSubmit={addCourse} style={{display: 'flex', gap: '10px'}}>
-                <input name="cn" placeholder="Course Title" required style={{flex: 2, padding: '12px', borderRadius: '8px', border: '1px solid #ddd'}} />
-                <input name="cc" placeholder="Code" required style={{flex: 1, padding: '12px', borderRadius: '8px', border: '1px solid #ddd'}} />
-                <button type="submit" style={{padding: '0 25px', background: '#006837', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer'}}>Add Course</button>
+              <form onSubmit={addCourse} style={{display: 'flex', gap: '10px', flexWrap: 'wrap'}}>
+                <input name="cn" placeholder="Course Title" required style={{flex: '2 1 200px', padding: '12px', borderRadius: '8px', border: '1px solid #ddd'}} />
+                <input name="cc" placeholder="Code" required style={{flex: '1 1 100px', padding: '12px', borderRadius: '8px', border: '1px solid #ddd'}} />
+                <button type="submit" style={{padding: '12px 25px', background: '#006837', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer'}}>Add Course</button>
               </form>
             </div>
             <div style={{display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '20px'}}>
@@ -119,42 +164,43 @@ export default function LecturerDashboard({ user, onLogout }) {
           </div>
         ) : (
           <div className="session">
-            <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '30px'}}>
-              <button onClick={() => setActiveCourse(null)} style={{background:'none', border:'none', cursor:'pointer', color:'#64748b'}}>← Back to Hub</button>
-              <h2 style={{color: '#003366'}}>{activeCourse.code}: {activeCourse.name}</h2>
+            <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', flexWrap: 'wrap', gap: '10px'}}>
+              <h2 style={{color: '#003366'}}>{activeCourse.code}</h2>
               <button onClick={downloadCSV} className="btn-download"><Download size={18}/> Export CSV</button>
             </div>
 
-            <div style={{display: 'flex', gap: '10px', margin: '20px 0'}}>
-              <div style={{flex: 1, background: 'white', display: 'flex', alignItems: 'center', padding: '0 15px', borderRadius: '12px', border: '1px solid #ddd'}}>
+            <div style={{display: 'flex', gap: '10px', margin: '20px 0', flexWrap: 'wrap'}}>
+              <div style={{flex: 1, background: 'white', display: 'flex', alignItems: 'center', padding: '0 15px', borderRadius: '12px', border: '1px solid #ddd', minWidth: '200px'}}>
                 <Search size={18} color="#94a3b8" />
                 <input placeholder="Search ID..." onChange={(e) => setSearchTerm(e.target.value)} style={{border:'none', padding:'12px', width:'100%', outline:'none'}} />
               </div>
-              <button onClick={() => setIsScanning(!isScanning)} style={{padding:'0 30px', background: isScanning ? '#be123c' : '#006837', color:'white', border:'none', borderRadius:'12px', cursor: 'pointer'}}>
+              <button onClick={() => setIsScanning(!isScanning)} style={{padding:'12px 30px', background: isScanning ? '#be123c' : '#006837', color:'white', border:'none', borderRadius:'12px', cursor: 'pointer', flex: '1 1 auto'}}>
                 {isScanning ? 'Close Scanner' : 'Start Scanning'}
               </button>
             </div>
 
-            {/* THE SCANNER BOX - Kept alive by the useCallback pattern above */}
             {isScanning && (
-              <div className="table-card" style={{border: '2px solid #006837'}}>
-                <p style={{fontSize: '0.8rem', color: '#006837', marginBottom: '10px', fontWeight: 'bold'}}>LIVE SCANNER ACTIVE - BRING QR TO CAMERA</p>
+              <div className="table-card" style={{border: '2px solid #006837', padding: '10px'}}>
                 <Scanner onResult={handleScanSuccess} />
               </div>
             )}
 
-            <div className="table-card">
+            <div className="table-card" style={{overflowX: 'auto'}}>
               <table className="pro-table">
                 <thead>
-                  <tr><th>Student ID</th><th>Full Name</th><th>Time Verified</th><th>Status</th></tr>
+                  <tr><th>Student Details</th><th>Time</th><th>Status</th></tr>
                 </thead>
                 <tbody>
                   {(attendance[`${activeCourse.code}-W${currentWeek}`] || [])
                     .filter(s => s.studentID.includes(searchTerm))
                     .map((s, i) => (
                       <tr key={i}>
-                        <td style={{fontWeight: '700', color: '#003366'}}>{s.studentID}</td>
-                        <td style={{fontWeight: '500'}}>{s.fullName}</td>
+                        <td>
+                          <div style={{display: 'flex', flexDirection: 'column'}}>
+                            <span style={{fontWeight: '700', color: '#003366'}}>{s.studentID}</span>
+                            <span style={{fontSize: '0.75rem', color: '#64748b'}}>{s.fullName}</span>
+                          </div>
+                        </td>
                         <td>{s.timeVerified}</td>
                         <td><span style={{background: '#dcfce7', color: '#166534', padding: '5px 12px', borderRadius: '20px', fontSize: '0.75rem', fontWeight: 'bold'}}>Verified ✅</span></td>
                       </tr>
