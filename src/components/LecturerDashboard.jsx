@@ -1,25 +1,22 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import Scanner from './Scanner';
-// Ensure Menu and X are imported
-import { Search, Download, LogOut, Menu, X } from 'lucide-react'; 
+import { Search, Download, LogOut, Menu, X, CheckCircle } from 'lucide-react'; 
 import { Parser } from '@json2csv/plainjs';
-// 🟢 Firebase Additions (Connecting to the cloud)
+// 🟢 Firebase Additions
 import { db } from '../firebase'; 
 import { collection, query, where, onSnapshot, addDoc, setDoc, doc } from "firebase/firestore";
 
 export default function LecturerDashboard({ user, onLogout }) {
-  // 🟢 State now initializes empty and fills from Firebase cloud
   const [courses, setCourses] = useState([]);
   const [attendance, setAttendance] = useState({});
   const [activeCourse, setActiveCourse] = useState(null);
   const [currentWeek, setCurrentWeek] = useState(1);
   const [isScanning, setIsScanning] = useState(false);
+  const [scanned, setScanned] = useState(false); // 🟢 Tracks if a scan just happened
+  const [lastScanned, setLastScanned] = useState(null); 
   const [searchTerm, setSearchTerm] = useState("");
-  
-  // 🟢 Sidebar State Restored
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
-  // 🟢 1. Load Courses from Firebase (Real-time)
   useEffect(() => {
     if (!user?.id) return;
     const q = query(collection(db, "courses"), where("lecturerId", "==", user.id));
@@ -29,7 +26,6 @@ export default function LecturerDashboard({ user, onLogout }) {
     return () => unsubscribe();
   }, [user.id]);
 
-  // 🟢 2. Load Attendance from Firebase (Real-time)
   useEffect(() => {
     if (!activeCourse) return;
     const sessionKey = `${activeCourse.code}-W${currentWeek}`;
@@ -43,7 +39,6 @@ export default function LecturerDashboard({ user, onLogout }) {
     return () => unsubscribe();
   }, [activeCourse, currentWeek]);
 
-  // 🟢 3. Add Course to Cloud
   const addCourse = async (e) => {
     e.preventDefault();
     await addDoc(collection(db, "courses"), {
@@ -55,17 +50,18 @@ export default function LecturerDashboard({ user, onLogout }) {
     e.target.reset();
   };
 
-  // 🟢 4. Handle Scan and Save to Cloud
+  // 🟢 FIXED: Captures Name and ID accurately and triggers "Scan Next" UI
   const handleScanSuccess = useCallback(async (rawResult) => {
-    if (!activeCourse) return;
+    if (!activeCourse || scanned) return;
     const sessionKey = `${activeCourse.code}-W${currentWeek}`;
-    const idMatch = rawResult.match(/(\d{7,10})/); 
-    const extractedID = idMatch ? idMatch[1] : "Unknown ID";
     
-    const cleanedName = rawResult.replace(/Name:/gi, "").replace(/ID:\s*\d+/gi, "").replace(extractedID, "").replace(/[:]/g, "").trim();
-    const extractedName = cleanedName || "Student " + extractedID;
+    // Improved extraction logic to capture names from the new QR format
+    const idMatch = rawResult.match(/ID:\s*(\d+)/i) || rawResult.match(/(\d{7,10})/); 
+    const nameMatch = rawResult.match(/Name:\s*([^|]+)/i);
+    
+    const extractedID = idMatch ? idMatch[1] : "Unknown ID";
+    const extractedName = nameMatch ? nameMatch[1].trim() : "Student " + extractedID;
 
-    // Save student to the cloud specifically for this course and week
     const docRef = doc(db, "attendance", sessionKey, "records", extractedID);
     await setDoc(docRef, {
       studentID: extractedID,
@@ -74,7 +70,10 @@ export default function LecturerDashboard({ user, onLogout }) {
       status: "Verified",
       timestamp: new Date()
     });
-  }, [activeCourse, currentWeek]);
+
+    setLastScanned(extractedName);
+    setScanned(true); // Switch to "Scan Next" view
+  }, [activeCourse, currentWeek, scanned]);
 
   const downloadCSV = () => {
     const sessionKey = `${activeCourse.code}-W${currentWeek}`;
@@ -93,55 +92,35 @@ export default function LecturerDashboard({ user, onLogout }) {
 
   return (
     <div className="dashboard-layout">
-      {/* 🟢 Sidebar now toggles the 'open' class */}
       <aside className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
-  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-    <img src="https://images.seeklogo.com/logo-png/35/2/kwame-nkrumah-university-of-science-technology-logo-png_seeklogo-350387.png" className="sidebar-logo" alt="KNUST" style={{ width: '80px' }} />
-    <X className="mobile-close-btn" onClick={() => setSidebarOpen(false)} />
-  </div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+          <img src="https://images.seeklogo.com/logo-png/35/2/kwame-nkrumah-university-of-science-technology-logo-png_seeklogo-350387.png" className="sidebar-logo" alt="KNUST" style={{ width: '80px' }} />
+          <X className="mobile-close-btn" onClick={() => setSidebarOpen(false)} />
+        </div>
 
-  {/* User Info Box */}
-  <div style={{ background: 'rgba(255,255,255,0.1)', padding: '15px', borderRadius: '12px', marginBottom: '20px' }}>
-    <p style={{ fontSize: '0.7rem', opacity: 0.7 }}>LOGGED IN AS</p>
-    <p><strong>{user.name}</strong></p>
-    <p style={{ fontSize: '0.8rem', opacity: 0.8 }}>ID: {user.id}</p>
-  </div>
+        <div style={{ background: 'rgba(255,255,255,0.1)', padding: '15px', borderRadius: '12px', marginBottom: '20px' }}>
+          <p style={{ fontSize: '0.7rem', opacity: 0.7 }}>LOGGED IN AS</p>
+          <p><strong>{user.name}</strong></p>
+          <p style={{ fontSize: '0.8rem', opacity: 0.8 }}>ID: {user.id}</p>
+        </div>
 
-  {/* 🟢 Navigation/Spacer 🟢 */}
-  <div style={{ flexGrow: 1 }}>
-    {/* You can add future menu links here */}
-  </div>
+        <div style={{ flexGrow: 1 }}></div>
 
-  {/* Logout Button - Now guaranteed to be visible or scrollable */}
-  <button 
-    onClick={onLogout} 
-    style={{
-      background: '#be123c', 
-      color: 'white', 
-      border: 'none', 
-      padding: '14px', 
-      borderRadius: '12px', 
-      cursor: 'pointer', 
-      display: 'flex', 
-      alignItems: 'center', 
-      justifyContent: 'center', 
-      gap: '8px',
-      width: '100%',
-      marginTop: 'auto', // Pushes to bottom on desktop
-      marginBottom: '50px' // Safety margin for mobile
-    }}
-  >
-    <LogOut size={18} /> Logout
-  </button>
-</aside>
+        <button onClick={onLogout} className="logout-btn-sidebar" style={{
+            background: '#be123c', color: 'white', border: 'none', padding: '14px', borderRadius: '12px', 
+            cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px',
+            width: '100%', marginTop: 'auto', marginBottom: '50px'
+        }}>
+          <LogOut size={18} /> Logout
+        </button>
+      </aside>
 
       <main className="main-content">
-        {/* 🟢 Hamburger Menu Button */}
         <div style={{display: 'flex', alignItems: 'center', marginBottom: '10px'}}>
             <button className="hamburger" onClick={() => setSidebarOpen(true)}>
                 <Menu size={28} />
             </button>
-            {activeCourse && <button onClick={() => setActiveCourse(null)} style={{background:'none', border:'none', cursor:'pointer', color:'#64748b'}}>← Back</button>}
+            {activeCourse && <button onClick={() => setActiveCourse(null)} style={{background:'none', border:'none', cursor:'pointer', color:'#64748b', marginLeft: '10px'}}>← Back to Hub</button>}
         </div>
 
         {!activeCourse ? (
@@ -165,23 +144,39 @@ export default function LecturerDashboard({ user, onLogout }) {
         ) : (
           <div className="session">
             <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', flexWrap: 'wrap', gap: '10px'}}>
-              <h2 style={{color: '#003366'}}>{activeCourse.code}</h2>
+              <h2 style={{color: '#003366'}}>{activeCourse.code} - Attendance</h2>
               <button onClick={downloadCSV} className="btn-download"><Download size={18}/> Export CSV</button>
             </div>
 
             <div style={{display: 'flex', gap: '10px', margin: '20px 0', flexWrap: 'wrap'}}>
               <div style={{flex: 1, background: 'white', display: 'flex', alignItems: 'center', padding: '0 15px', borderRadius: '12px', border: '1px solid #ddd', minWidth: '200px'}}>
                 <Search size={18} color="#94a3b8" />
-                <input placeholder="Search ID..." onChange={(e) => setSearchTerm(e.target.value)} style={{border:'none', padding:'12px', width:'100%', outline:'none'}} />
+                <input placeholder="Search Student ID..." onChange={(e) => setSearchTerm(e.target.value)} style={{border:'none', padding:'12px', width:'100%', outline:'none'}} />
               </div>
-              <button onClick={() => setIsScanning(!isScanning)} style={{padding:'12px 30px', background: isScanning ? '#be123c' : '#006837', color:'white', border:'none', borderRadius:'12px', cursor: 'pointer', flex: '1 1 auto'}}>
+              <button onClick={() => { setIsScanning(!isScanning); setScanned(false); setLastScanned(null); }} style={{padding:'12px 30px', background: isScanning ? '#be123c' : '#006837', color:'white', border:'none', borderRadius:'12px', cursor: 'pointer', flex: '1 1 auto', fontWeight: 'bold'}}>
                 {isScanning ? 'Close Scanner' : 'Start Scanning'}
               </button>
             </div>
 
             {isScanning && (
-              <div className="table-card" style={{border: '2px solid #006837', padding: '10px'}}>
-                <Scanner onResult={handleScanSuccess} />
+              <div className="table-card" style={{border: '3px solid #006837', padding: '10px', borderRadius: '16px', overflow: 'hidden', textAlign: 'center'}}>
+                {!scanned ? (
+                  <>
+                    <Scanner onResult={handleScanSuccess} />
+                    <p style={{marginTop: '10px', color: '#64748b', fontSize: '0.9rem'}}>Align the student's QR code within the frame</p>
+                  </>
+                ) : (
+                  <div style={{padding: '30px', background: '#f0fdf4', borderRadius: '12px'}}>
+                    <CheckCircle size={48} color="#166534" style={{marginBottom: '10px'}} />
+                    <h3 style={{color: '#166534'}}>Verified: {lastScanned}</h3>
+                    <button 
+                      onClick={() => setScanned(false)} 
+                      style={{marginTop: '20px', padding: '12px 25px', background: '#006837', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold'}}
+                    >
+                      Scan Next Student
+                    </button>
+                  </div>
+                )}
               </div>
             )}
 
@@ -193,6 +188,7 @@ export default function LecturerDashboard({ user, onLogout }) {
                 <tbody>
                   {(attendance[`${activeCourse.code}-W${currentWeek}`] || [])
                     .filter(s => s.studentID.includes(searchTerm))
+                    .sort((a,b) => b.timestamp?.seconds - a.timestamp?.seconds)
                     .map((s, i) => (
                       <tr key={i}>
                         <td>
