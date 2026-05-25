@@ -1,0 +1,166 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function hasProfile() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    function profile() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function isStudent() {
+      return hasProfile() && profile().role == 'student';
+    }
+
+    function isLecturer() {
+      return hasProfile() && profile().role == 'lecturer';
+    }
+
+    function isCourseOwner(courseId) {
+      return isLecturer()
+        && exists(/databases/$(database)/documents/courses/$(courseId))
+        && get(/databases/$(database)/documents/courses/$(courseId)).data.lecturerId == request.auth.uid;
+    }
+
+    function sessionExists(sessionId) {
+      return exists(/databases/$(database)/documents/attendance/$(sessionId));
+    }
+
+    function session(sessionId) {
+      return get(/databases/$(database)/documents/attendance/$(sessionId)).data;
+    }
+
+    function isSessionLecturer(sessionId) {
+      return isLecturer()
+        && sessionExists(sessionId)
+        && session(sessionId).lecturerId == request.auth.uid;
+    }
+
+    function isActiveSession(sessionId) {
+      return sessionExists(sessionId) && session(sessionId).active == true;
+    }
+
+    function isRosteredForSession(sessionId, studentId) {
+      return sessionExists(sessionId)
+        && exists(/databases/$(database)/documents/courses/$(session(sessionId).courseId)/students/$(studentId));
+    }
+
+    function validProfileCreate(uid) {
+      return signedIn()
+        && request.auth.uid == uid
+        && request.resource.data.keys().hasOnly([
+          'name',
+          'knust_id',
+          'login_id',
+          'role',
+          'email',
+          'authEmail',
+          'createdAt',
+          'updatedAt'
+        ])
+        && request.resource.data.name is string
+        && request.resource.data.knust_id is string
+        && request.resource.data.login_id is string
+        && request.resource.data.role in ['student', 'lecturer'];
+    }
+
+    match /lecturerApprovals/{lecturerId} {
+      allow read, write: if false;
+    }
+
+    match /users/{uid} {
+      allow create: if validProfileCreate(uid)
+        && (
+          (
+            request.resource.data.role == 'student'
+            && request.resource.data.knust_id.matches('^[0-9]{8}$')
+          )
+          || (
+            request.resource.data.role == 'lecturer'
+            && exists(/databases/$(database)/documents/lecturerApprovals/$(request.resource.data.login_id))
+          )
+        );
+
+      allow get: if signedIn() && (request.auth.uid == uid || isLecturer());
+      allow list: if isLecturer();
+
+      allow update: if signedIn()
+        && request.auth.uid == uid
+        && request.resource.data.role == resource.data.role
+        && request.resource.data.knust_id == resource.data.knust_id
+        && request.resource.data.login_id == resource.data.login_id;
+
+      allow delete: if false;
+    }
+
+    match /courses/{courseId} {
+      allow read: if signedIn();
+      allow create: if isLecturer()
+        && request.resource.data.lecturerId == request.auth.uid;
+      allow update, delete: if isLecturer()
+        && resource.data.lecturerId == request.auth.uid;
+
+      match /students/{studentId} {
+        allow get: if isCourseOwner(courseId)
+          || (isStudent() && profile().knust_id == studentId);
+        allow list: if isCourseOwner(courseId);
+        allow create, update, delete: if isCourseOwner(courseId);
+      }
+    }
+
+    match /attendance/{sessionId} {
+      allow get, list: if (isSessionLecturer(sessionId))
+        || (isStudent() && resource.data.active == true);
+
+      allow create: if isLecturer()
+        && request.resource.data.lecturerId == request.auth.uid
+        && request.resource.data.courseId is string
+        && isCourseOwner(request.resource.data.courseId);
+
+      allow update: if isSessionLecturer(sessionId);
+      allow delete: if false;
+
+      match /records/{studentId} {
+        allow get: if isSessionLecturer(sessionId)
+          || (isStudent() && profile().knust_id == studentId);
+        allow list: if isSessionLecturer(sessionId);
+
+        allow create: if isStudent()
+          && isActiveSession(sessionId)
+          && profile().knust_id == studentId
+          && isRosteredForSession(sessionId, studentId)
+          && !exists(/databases/$(database)/documents/attendance/$(sessionId)/records/$(studentId))
+          && request.resource.data.studentID == studentId
+          && request.resource.data.status == 'Verified'
+          && request.resource.data.method == 'Bluetooth';
+
+        allow update, delete: if isSessionLecturer(sessionId);
+      }
+
+      match /devices/{deviceId} {
+        allow get: if isSessionLecturer(sessionId)
+          || (isStudent() && isActiveSession(sessionId));
+        allow list: if isSessionLecturer(sessionId);
+
+        allow create: if isStudent()
+          && isActiveSession(sessionId)
+          && request.resource.data.studentID == profile().knust_id
+          && !exists(/databases/$(database)/documents/attendance/$(sessionId)/devices/$(deviceId));
+
+        allow update, delete: if isSessionLecturer(sessionId);
+      }
+
+      match /audit/{auditId} {
+        allow read, create: if isSessionLecturer(sessionId);
+        allow update, delete: if false;
+      }
+    }
+  }
+}
