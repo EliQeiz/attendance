@@ -132,14 +132,17 @@ service cloud.firestore {
           || (isStudent() && profile().knust_id == studentId);
         allow list: if isSessionLecturer(sessionId);
 
-        allow create: if isStudent()
-          && isActiveSession(sessionId)
-          && profile().knust_id == studentId
-          && isRosteredForSession(sessionId, studentId)
-          && !exists(/databases/$(database)/documents/attendance/$(sessionId)/records/$(studentId))
-          && request.resource.data.studentID == studentId
-          && request.resource.data.status == 'Verified'
-          && request.resource.data.method == 'Bluetooth';
+        allow create: if isSessionLecturer(sessionId)
+          || (
+            isStudent()
+            && isActiveSession(sessionId)
+            && profile().knust_id == studentId
+            && isRosteredForSession(sessionId, studentId)
+            && !exists(/databases/$(database)/documents/attendance/$(sessionId)/records/$(studentId))
+            && request.resource.data.studentID == studentId
+            && request.resource.data.status == 'Verified'
+            && request.resource.data.method == 'PIN_GPS'
+          );
 
         allow update, delete: if isSessionLecturer(sessionId);
       }

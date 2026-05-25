@@ -1,21 +1,50 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { QRCodeCanvas } from 'qrcode.react';
 import { motion } from 'framer-motion';
-import { AlertCircle, Bluetooth, CheckCircle, LogOut, QrCode } from 'lucide-react';
+import { AlertCircle, CheckCircle, KeyRound, LogOut, MapPin, QrCode } from 'lucide-react';
 import { db } from '../firebase';
 import {
   collection,
   doc,
-  getDoc,
   onSnapshot,
   query,
+  runTransaction,
   serverTimestamp,
-  setDoc,
   where
 } from 'firebase/firestore';
 
 const MotionDiv = motion.div;
-const BLE_SERVICE_UUID = '0000feed-0000-1000-8000-00805f9b34fb';
+const PIN_WINDOW_MS = 15 * 1000;
+const LOCATION_THRESHOLD_METERS = 40;
+
+const toRadians = (degrees) => degrees * (Math.PI / 180);
+const getDistanceMeters = (start, end) => {
+  const earthRadiusMeters = 6371000;
+  const latitudeDelta = toRadians(end.latitude - start.latitude);
+  const longitudeDelta = toRadians(end.longitude - start.longitude);
+  const startLatitude = toRadians(start.latitude);
+  const endLatitude = toRadians(end.latitude);
+  const haversine =
+    Math.sin(latitudeDelta / 2) ** 2 +
+    Math.cos(startLatitude) * Math.cos(endLatitude) * Math.sin(longitudeDelta / 2) ** 2;
+
+  return 2 * earthRadiusMeters * Math.atan2(Math.sqrt(haversine), Math.sqrt(1 - haversine));
+};
+
+const getCurrentPosition = () => (
+  new Promise((resolve, reject) => {
+    if (!navigator.geolocation) {
+      reject(new Error('This browser does not support GPS location.'));
+      return;
+    }
+
+    navigator.geolocation.getCurrentPosition(resolve, reject, {
+      enableHighAccuracy: true,
+      maximumAge: 0,
+      timeout: 10000
+    });
+  })
+);
 
 const createDeviceKey = () => {
   const browserCrypto = globalThis.crypto;
@@ -50,22 +79,23 @@ export default function StudentDashboard({ user, onLogout }) {
   const [isVerifying, setIsVerifying] = useState(false);
   const [verifiedSessionKey, setVerifiedSessionKey] = useState('');
   const [existingVerification, setExistingVerification] = useState(null);
+  const [pinInput, setPinInput] = useState('');
 
   useEffect(() => {
     const activeSessionsQuery = query(collection(db, 'attendance'), where('active', '==', true));
 
     const unsubscribe = onSnapshot(activeSessionsQuery, (snapshot) => {
-      const bluetoothSessions = snapshot.docs
+      const pinSessions = snapshot.docs
         .map(sessionDoc => ({ id: sessionDoc.id, ...sessionDoc.data() }))
-        .filter(session => session.method === 'Bluetooth');
+        .filter(session => session.method === 'PIN_GPS');
 
-      setSessions(bluetoothSessions);
+      setSessions(pinSessions);
 
-      if (!selectedSessionKey && bluetoothSessions.length === 1) {
-        setSelectedSessionKey(bluetoothSessions[0].id);
+      if (!selectedSessionKey && pinSessions.length === 1) {
+        setSelectedSessionKey(pinSessions[0].id);
       }
 
-      if (selectedSessionKey && !bluetoothSessions.some(session => session.id === selectedSessionKey)) {
+      if (selectedSessionKey && !pinSessions.some(session => session.id === selectedSessionKey)) {
         setSelectedSessionKey('');
       }
     });
@@ -118,98 +148,144 @@ export default function StudentDashboard({ user, onLogout }) {
     setError('');
     setStatus('');
     setVerifiedSessionKey('');
+    const submittedPin = pinInput.trim();
 
     if (!selectedSession) {
-      setError('No active Bluetooth attendance session is available right now.');
+      setError('No active PIN attendance session is available right now.');
       return;
     }
 
-    if (!navigator.bluetooth) {
-      setError('This browser does not support Web Bluetooth. Please use Chrome or Edge on Android, Windows, macOS, or ChromeOS.');
+    if (!/^\d{4}$/.test(submittedPin)) {
+      setError('Enter the current 4-digit PIN displayed by the lecturer.');
       return;
     }
 
-    const sessionName = selectedSession.sessionName || 'KNUST_LEC_';
-    const serviceUuid = selectedSession.serviceUuid || BLE_SERVICE_UUID;
+    if (!navigator.geolocation) {
+      setError('This browser does not support GPS location. Please use a GPS-enabled browser.');
+      return;
+    }
+
+    const sessionRef = doc(db, 'attendance', selectedSession.id);
     const recordRef = doc(db, 'attendance', selectedSession.id, 'records', studentId);
     const deviceKey = getBrowserDeviceKey();
     const deviceRef = doc(db, 'attendance', selectedSession.id, 'devices', deviceKey);
     setIsVerifying(true);
-    setStatus(`Scanning for ${sessionName}...`);
+    setStatus('Checking PIN and location...');
 
     try {
-      const existingRecord = await getDoc(recordRef);
-      if (existingRecord.exists()) {
-        setExistingVerification(existingRecord.data());
+      const position = await getCurrentPosition();
+      const now = new Date();
+      const nowMs = Date.now();
+      const studentLocation = {
+        latitude: position.coords.latitude,
+        longitude: position.coords.longitude,
+        accuracy: position.coords.accuracy,
+        capturedAtMs: nowMs
+      };
+
+      const result = await runTransaction(db, async (transaction) => {
+        const sessionSnap = await transaction.get(sessionRef);
+
+        if (!sessionSnap.exists()) {
+          throw new Error('This attendance session no longer exists.');
+        }
+
+        const liveSession = sessionSnap.data();
+        const lecturerLocation = liveSession.lecturerLocation;
+        const thresholdMeters = liveSession.locationThresholdMeters || LOCATION_THRESHOLD_METERS;
+        const issuedAtMs = liveSession.pinGeneratedAt?.toMillis?.() || liveSession.pinIssuedAtMs;
+        const expiresAtMs = issuedAtMs + (liveSession.pinWindowMs || PIN_WINDOW_MS);
+
+        if (!liveSession.active || liveSession.method !== 'PIN_GPS') {
+          throw new Error('This attendance session is no longer active.');
+        }
+
+        if (liveSession.currentPin !== submittedPin) {
+          throw new Error('Invalid PIN. Use the current PIN displayed by the lecturer.');
+        }
+
+        if (!issuedAtMs || nowMs > expiresAtMs || nowMs - issuedAtMs > PIN_WINDOW_MS) {
+          throw new Error('This PIN has expired. Enter the newly displayed PIN.');
+        }
+
+        if (typeof lecturerLocation?.latitude !== 'number' || typeof lecturerLocation?.longitude !== 'number') {
+          throw new Error('Lecturer GPS location is not ready yet. Try again in a moment.');
+        }
+
+        const distanceMeters = getDistanceMeters(studentLocation, lecturerLocation);
+
+        if (distanceMeters > thresholdMeters) {
+          throw new Error(`You are ${Math.round(distanceMeters)}m from the lecturer. Move within ${thresholdMeters}m and try again.`);
+        }
+
+        const existingRecord = await transaction.get(recordRef);
+        if (existingRecord.exists()) {
+          return {
+            alreadyVerified: true,
+            record: existingRecord.data(),
+            distanceMeters
+          };
+        }
+
+        const existingDevice = await transaction.get(deviceRef);
+        if (existingDevice.exists() && existingDevice.data().studentID !== studentId) {
+          throw new Error('This device has already been used to verify another student for this session.');
+        }
+
+        if (liveSession.courseId) {
+          const rosterRef = doc(db, 'courses', liveSession.courseId, 'students', studentId);
+          const rosterSnap = await transaction.get(rosterRef);
+
+          if (!rosterSnap.exists()) {
+            throw new Error('Your student ID is not on this course roster. Ask the lecturer to add you before verifying.');
+          }
+        }
+
+        transaction.set(recordRef, {
+          studentID: studentId,
+          fullName: user.name,
+          timeVerified: now.toLocaleTimeString(),
+          verifiedAt: serverTimestamp(),
+          verifiedAtIso: now.toISOString(),
+          verificationDate: now.toLocaleDateString(),
+          status: 'Verified',
+          timestamp: serverTimestamp(),
+          method: 'PIN_GPS',
+          courseCode: liveSession.courseCode,
+          week: liveSession.weekNumber,
+          sessionKey: selectedSession.id,
+          deviceName: studentDeviceName,
+          deviceKey,
+          studentLocation,
+          lecturerLocation,
+          distanceMeters: Math.round(distanceMeters),
+          pinWindowMs: liveSession.pinWindowMs || PIN_WINDOW_MS
+        }, { merge: true });
+
+        transaction.set(deviceRef, {
+          studentID: studentId,
+          fullName: user.name,
+          deviceName: studentDeviceName,
+          verifiedAt: serverTimestamp()
+        }, { merge: true });
+
+        return { alreadyVerified: false, distanceMeters };
+      });
+
+      if (result.alreadyVerified) {
+        setExistingVerification(result.record);
         setVerifiedSessionKey(selectedSession.id);
         setStatus(`You are already verified for ${selectedSession.courseCode || selectedSession.originalCourseCode}.`);
         return;
       }
 
-      const existingDevice = await getDoc(deviceRef);
-      if (existingDevice.exists() && existingDevice.data().studentID !== studentId) {
-        setError('This device has already been used to verify another student for this session.');
-        setStatus('');
-        return;
-      }
-
-      if (selectedSession.courseId) {
-        const rosterRef = doc(db, 'courses', selectedSession.courseId, 'students', studentId);
-        const rosterSnap = await getDoc(rosterRef);
-
-        if (!rosterSnap.exists()) {
-          setError('Your student ID is not on this course roster. Ask the lecturer to add you before verifying.');
-          setStatus('');
-          return;
-        }
-      }
-
-      const device = await navigator.bluetooth.requestDevice({
-        filters: [{ namePrefix: sessionName }],
-        optionalServices: [serviceUuid]
-      });
-
-      if (device.gatt?.connect) {
-        try {
-          await device.gatt.connect();
-        } catch (connectError) {
-          console.warn('BLE device selected but GATT connection was not completed:', connectError);
-        }
-      }
-
-      const now = new Date();
-      await setDoc(recordRef, {
-        studentID: studentId,
-        fullName: user.name,
-        timeVerified: now.toLocaleTimeString(),
-        verifiedAt: serverTimestamp(),
-        verifiedAtIso: now.toISOString(),
-        verificationDate: now.toLocaleDateString(),
-        status: 'Verified',
-        timestamp: serverTimestamp(),
-        method: 'Bluetooth',
-        courseCode: selectedSession.courseCode,
-        week: selectedSession.weekNumber,
-        sessionKey: selectedSession.id,
-        deviceName: studentDeviceName,
-        deviceKey,
-        lecturerDeviceName: device.name || sessionName
-      }, { merge: true });
-
-      await setDoc(deviceRef, {
-        studentID: studentId,
-        fullName: user.name,
-        deviceName: studentDeviceName,
-        verifiedAt: serverTimestamp()
-      }, { merge: true });
-
       setVerifiedSessionKey(selectedSession.id);
-      setStatus(`Presence verified for ${selectedSession.courseCode || selectedSession.originalCourseCode}.`);
-    } catch (bluetoothError) {
-      const cancelled = bluetoothError?.name === 'NotFoundError';
-      setError(cancelled
-        ? `No matching BLE device was selected. Move closer and scan for ${sessionName} again.`
-        : `Bluetooth verification failed: ${bluetoothError.message || 'unknown Bluetooth error'}.`
+      setPinInput('');
+      setStatus(`Presence verified for ${selectedSession.courseCode || selectedSession.originalCourseCode}. Distance: ${Math.round(result.distanceMeters)}m.`);
+    } catch (verificationError) {
+      setError(verificationError?.code === 1
+        ? 'Location permission is required to verify attendance.'
+        : verificationError.message || 'PIN + GPS verification failed. Please try again.'
       );
       setStatus('');
     } finally {
@@ -246,10 +322,10 @@ export default function StudentDashboard({ user, onLogout }) {
           textAlign: 'left'
         }}>
           <div style={{display: 'flex', gap: '12px', alignItems: 'center', marginBottom: '14px'}}>
-            <Bluetooth size={30} color="#003366" />
+            <KeyRound size={30} color="#003366" />
             <div>
-              <h3 style={{color: '#003366', fontSize: '1rem', margin: 0}}>Bluetooth Presence</h3>
-              <p style={{color: '#64748b', fontSize: '0.8rem', margin: 0}}>Scan for the lecturer's active BLE session.</p>
+              <h3 style={{color: '#003366', fontSize: '1rem', margin: 0}}>PIN + GPS Presence</h3>
+              <p style={{color: '#64748b', fontSize: '0.8rem', margin: 0}}>Enter the lecturer's current 4-digit PIN.</p>
             </div>
           </div>
 
@@ -278,12 +354,12 @@ export default function StudentDashboard({ user, onLogout }) {
             fontWeight: 600
           }}>
             {selectedSession
-              ? `${selectedSession.originalCourseCode || selectedSession.courseCode} Week ${selectedSession.weekNumber}: ${selectedSession.sessionName}`
-              : 'Waiting for a lecturer to start a BLE session.'}
+              ? `${selectedSession.originalCourseCode || selectedSession.courseCode} Week ${selectedSession.weekNumber}: PIN refreshes every 15 seconds`
+              : 'Waiting for a lecturer to start a PIN session.'}
           </div>
 
           <p style={{color: '#64748b', fontSize: '0.8rem', margin: '12px 0 0'}}>
-            Device name: <strong>{studentDeviceName}</strong>
+            Location threshold: <strong>{selectedSession?.locationThresholdMeters || LOCATION_THRESHOLD_METERS}m</strong>
           </p>
         </div>
 
@@ -323,7 +399,38 @@ export default function StudentDashboard({ user, onLogout }) {
             justifyContent: 'center',
             gap: '8px'
           }}>
-            {verifiedSessionKey ? <CheckCircle size={16} /> : <Bluetooth size={16} />} {status}
+            {verifiedSessionKey ? <CheckCircle size={16} /> : <MapPin size={16} />} {status}
+          </div>
+        )}
+
+        {selectedSession && !isAlreadyVerified && (
+          <div style={{
+            margin: '18px 0',
+            padding: '16px',
+            background: '#ffffff',
+            borderRadius: '16px',
+            border: '1px solid #e2e8f0',
+            boxShadow: '0 4px 12px rgba(0,0,0,0.08)'
+          }}>
+            <input
+              placeholder="4-digit PIN"
+              inputMode="numeric"
+              maxLength={4}
+              value={pinInput}
+              onChange={(event) => setPinInput(event.target.value.replace(/\D/g, '').slice(0, 4))}
+              style={{
+                width: '100%',
+                textAlign: 'center',
+                fontSize: '2rem',
+                letterSpacing: '8px',
+                fontWeight: 900,
+                color: '#003366',
+                border: '2px solid #dbeafe',
+                borderRadius: '14px',
+                padding: '12px',
+                outline: 'none'
+              }}
+            />
           </div>
         )}
 
@@ -367,8 +474,8 @@ export default function StudentDashboard({ user, onLogout }) {
             gap: '8px'
           }}
         >
-          {isAlreadyVerified ? <CheckCircle size={18} /> : <Bluetooth size={18} />}
-          {isAlreadyVerified ? 'Already Verified' : isVerifying ? 'Scanning...' : 'Verify Presence (Bluetooth)'}
+          {isAlreadyVerified ? <CheckCircle size={18} /> : <MapPin size={18} />}
+          {isAlreadyVerified ? 'Already Verified' : isVerifying ? 'Verifying...' : 'Submit PIN + Verify Location'}
         </button>
 
         <button

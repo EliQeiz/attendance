@@ -1,6 +1,6 @@
 # KNUST Lecturer Tracking & Attendance Platform
 
-React + Firebase attendance platform for lecturer-led course sessions with Bluetooth presence checks, QR fallback, roster import, attendance history, correction workflows, and CSV export.
+React + Firebase attendance platform for lecturer-led course sessions with rotating PIN + GPS proximity checks, QR fallback, roster import, attendance history, correction workflows, and CSV export.
 
 ## Local Development
 
@@ -25,4 +25,4 @@ Firebase web config can be supplied with Vite variables. Copy `.env.example` to 
 
 Deploy `firestore.rules` before using the app with real student data. Lecturer sign-up is intentionally approval-gated: create a `lecturerApprovals/{lecturerLoginId}` document in Firestore before that lecturer creates an account.
 
-Students must be on the course roster before a Bluetooth attendance record can be created. Lecturers own their courses, rosters, sessions, edits, exports, and audit logs.
+Students must be on the course roster before a PIN + GPS attendance record can be created. Lecturers own their courses, rosters, sessions, edits, exports, and audit logs.

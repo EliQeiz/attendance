@@ -18,7 +18,8 @@ import {
   ArrowLeft,
   ChevronRight,
   FileSpreadsheet,
-  Bluetooth,
+  KeyRound,
+  MapPin,
   Power,
   AlertCircle,
   QrCode,
@@ -49,15 +50,34 @@ import {
 
 const MotionDiv = motion.div;
 const WEEKS = Array.from({ length: 15 }, (_, i) => i + 1);
-const BLE_SERVICE_UUID = '0000feed-0000-1000-8000-00805f9b34fb';
+const PIN_WINDOW_MS = 15 * 1000;
+const PIN_DISTANCE_METERS = 40;
 const MAX_ROSTER_FILE_BYTES = 2 * 1024 * 1024;
 const MAX_ROSTER_ROWS = 5000;
 const SUPPORTED_ROSTER_EXTENSIONS = ['csv', 'xlsx'];
 
 const normalizeCourseCode = (code = '') => code.replace(/\s+/g, '').toUpperCase();
 const getSessionKey = (courseCode, weekNumber) => `${normalizeCourseCode(courseCode)}-W${weekNumber}`;
-const getSessionName = (courseCode, weekNumber) => `KNUST_LEC_${normalizeCourseCode(courseCode)}_W${weekNumber}`;
 const getStudentDeviceName = (studentID) => `KNUST_STU_${studentID}`;
+const generatePin = () => {
+  const entropy = new Uint32Array(1);
+  globalThis.crypto.getRandomValues(entropy);
+  return String(entropy[0] % 10000).padStart(4, '0');
+};
+const getCurrentPosition = () => (
+  new Promise((resolve, reject) => {
+    if (!navigator.geolocation) {
+      reject(new Error('This browser does not support GPS location.'));
+      return;
+    }
+
+    navigator.geolocation.getCurrentPosition(resolve, reject, {
+      enableHighAccuracy: true,
+      maximumAge: 0,
+      timeout: 10000
+    });
+  })
+);
 
 const normalizeHeader = (value = '') => value.toString().trim().toLowerCase().replace(/[^a-z0-9]/g, '');
 const cleanCell = (value = '') => value.toString().trim().replace(/\.0$/, '');
@@ -238,11 +258,6 @@ const parseQrPayload = (rawResult) => {
   }
 };
 
-const parseStudentIdFromDeviceName = (deviceName = '') => {
-  const match = deviceName.match(/KNUST[_-]?STU[_-]?(\d{6,12})/i) || deviceName.match(/(\d{8})/);
-  return match ? match[1] : '';
-};
-
 const getDateValue = (value) => {
   if (!value) return null;
   if (value?.toDate) return value.toDate();
@@ -344,7 +359,7 @@ export default function LecturerDashboard({ user, onLogout }) {
       setActiveSession(sessionData);
       if (!sessionData?.active) return;
 
-      setBleStatus(`Active BLE session: ${sessionData.sessionName || getSessionName(activeCourse.code, currentWeek)}`);
+      setBleStatus(`Active PIN session. Current PIN: ${sessionData.currentPin || 'refreshing...'}`);
     });
 
     return () => unsubscribe();
@@ -800,61 +815,36 @@ export default function LecturerDashboard({ user, onLogout }) {
     }
   };
 
-  const markNearbyStudentDevice = async () => {
-    if (!activeSession?.active) {
-      setBleStatus('Start the attendance session before picking up student devices.');
-      return;
+  const refreshPinSession = useCallback(async ({ silent = false } = {}) => {
+    if (!activeCourse) return;
+
+    const sessionKey = getSessionKey(activeCourse.code, currentWeek);
+    const position = await getCurrentPosition();
+    const nowMs = Date.now();
+    const currentPin = generatePin();
+
+    await setDoc(doc(db, "attendance", sessionKey), {
+      currentPin,
+      pinIssuedAtMs: nowMs,
+      pinExpiresAtMs: nowMs + PIN_WINDOW_MS,
+      pinWindowMs: PIN_WINDOW_MS,
+      locationThresholdMeters: PIN_DISTANCE_METERS,
+      lecturerLocation: {
+        latitude: position.coords.latitude,
+        longitude: position.coords.longitude,
+        accuracy: position.coords.accuracy,
+        capturedAtMs: nowMs
+      },
+      pinGeneratedAt: serverTimestamp(),
+      locationUpdatedAt: serverTimestamp()
+    }, { merge: true });
+
+    if (!silent) {
+      setBleStatus(`PIN refreshed: ${currentPin}. It expires in 15 seconds.`);
     }
+  }, [activeCourse, currentWeek]);
 
-    if (!navigator.bluetooth) {
-      setBleStatus('This browser does not support Web Bluetooth device pickup.');
-      return;
-    }
-
-    setIsBleBusy(true);
-    setBleStatus('Scanning for a nearby student device...');
-
-    try {
-      const device = await navigator.bluetooth.requestDevice({
-        filters: [{ namePrefix: 'KNUST_STU_' }],
-        optionalServices: [BLE_SERVICE_UUID]
-      });
-      const studentID = parseStudentIdFromDeviceName(device.name || '');
-
-      if (!studentID) {
-        setBleStatus(`Selected device "${device.name || 'Unnamed device'}" does not contain a valid student ID.`);
-        return;
-      }
-
-      const result = await recordAttendance({
-        studentID,
-        method: 'Bluetooth Device',
-        deviceName: device.name || getStudentDeviceName(studentID)
-      });
-
-      if (result.alreadyVerified) {
-        setBleStatus(`${studentID} was already verified for this session.`);
-        return;
-      }
-
-      setBleStatus(result.ok
-        ? `${studentID} verified from nearby student device.`
-        : result.reason === 'not-rostered'
-          ? `${studentID} is not on this course roster. Add the student manually first, then verify again.`
-          : 'Student device verification was blocked. Check the active session and device name.'
-      );
-    } catch (error) {
-      const cancelled = error?.name === 'NotFoundError';
-      setBleStatus(cancelled
-        ? 'No student device was selected.'
-        : `Student device pickup failed: ${error.message || 'unknown Bluetooth error'}.`
-      );
-    } finally {
-      setIsBleBusy(false);
-    }
-  };
-
-  const startBleSession = async () => {
+  const startPinSession = async () => {
     if (!activeCourse) return;
 
     if (!activeCourse.rosterCount) {
@@ -863,12 +853,15 @@ export default function LecturerDashboard({ user, onLogout }) {
     }
 
     const sessionKey = getSessionKey(activeCourse.code, currentWeek);
-    const sessionName = getSessionName(activeCourse.code, currentWeek);
     setIsBleBusy(true);
-    setBleStatus('Starting BLE session...');
+    setBleStatus('Requesting lecturer GPS and generating secure PIN...');
 
     try {
       const now = new Date();
+      const nowMs = Date.now();
+      const currentPin = generatePin();
+      const position = await getCurrentPosition();
+
       await setDoc(doc(db, "attendance", sessionKey), {
         active: true,
         courseCode: normalizeCourseCode(activeCourse.code),
@@ -879,44 +872,35 @@ export default function LecturerDashboard({ user, onLogout }) {
         lecturerId: user.id,
         lecturerName: user.name,
         weekNumber: currentWeek,
-        method: "Bluetooth",
+        method: "PIN_GPS",
+        verificationMode: "PIN_GPS",
         sessionKey,
-        sessionName,
-        serviceUuid: BLE_SERVICE_UUID,
+        currentPin,
+        pinIssuedAtMs: nowMs,
+        pinExpiresAtMs: nowMs + PIN_WINDOW_MS,
+        pinWindowMs: PIN_WINDOW_MS,
+        locationThresholdMeters: PIN_DISTANCE_METERS,
+        lecturerLocation: {
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude,
+          accuracy: position.coords.accuracy,
+          capturedAtMs: nowMs
+        },
         startedAt: serverTimestamp(),
         startedAtIso: now.toISOString(),
         sessionDate: now.toLocaleDateString(),
-        endedAt: null
+        endedAt: null,
+        pinGeneratedAt: serverTimestamp(),
+        locationUpdatedAt: serverTimestamp()
       }, { merge: true });
 
-      if (!navigator.bluetooth) {
-        setBleStatus(`Session is active. This browser cannot bind to BLE hardware; use Chrome or Edge with an external BLE beacon named ${sessionName}.`);
-        return;
-      }
-
-      try {
-        const device = await navigator.bluetooth.requestDevice({
-          filters: [{ namePrefix: sessionName }],
-          optionalServices: [BLE_SERVICE_UUID]
-        });
-
-        await setDoc(doc(db, "attendance", sessionKey), {
-          deviceId: device.id,
-          deviceName: device.name || sessionName,
-          boundAt: serverTimestamp()
-        }, { merge: true });
-
-        setBleStatus(`Session active and bound to ${device.name || sessionName}.`);
-      } catch (bluetoothError) {
-        const cancelled = bluetoothError?.name === 'NotFoundError';
-        setBleStatus(cancelled
-          ? `Session is active. No BLE device was selected; advertise a device with name prefix ${sessionName} for student scanning.`
-          : `Session is active, but BLE binding failed: ${bluetoothError.message || 'unknown Bluetooth error'}.`
-        );
-      }
+      setBleStatus(`Session active. Current PIN: ${currentPin}. It will rotate every 15 seconds.`);
     } catch (error) {
-      console.error("Unable to start BLE session:", error);
-      setBleStatus('Unable to start BLE session. Please check Firebase permissions and try again.');
+      console.error("Unable to start PIN session:", error);
+      setBleStatus(error?.code === 1
+        ? 'Location permission is required to start a PIN + GPS session.'
+        : 'Unable to start PIN + GPS session. Please check location and Firebase permissions.'
+      );
     } finally {
       setIsBleBusy(false);
     }
@@ -954,12 +938,25 @@ export default function LecturerDashboard({ user, onLogout }) {
 
       setBleStatus(`Session ended. ${recordsSnapshot.size} verified, ${absentStudents.length} absent for exports.`);
     } catch (error) {
-      console.error("Unable to end BLE session:", error);
+      console.error("Unable to end PIN session:", error);
       setBleStatus('Unable to end session. Please check Firebase permissions and try again.');
     } finally {
       setIsBleBusy(false);
     }
   };
+
+  useEffect(() => {
+    if (!activeCourse || !activeSession?.active || activeSession.method !== 'PIN_GPS') return;
+
+    const rotationTimer = window.setInterval(() => {
+      refreshPinSession({ silent: true }).catch((error) => {
+        console.error('PIN rotation failed:', error);
+        setBleStatus('PIN rotation paused. Keep location permission enabled and refresh the session.');
+      });
+    }, PIN_WINDOW_MS);
+
+    return () => window.clearInterval(rotationTimer);
+  }, [activeCourse, activeSession?.active, activeSession?.method, refreshPinSession]);
 
   const buildExportRows = async (weekNum) => {
     const selectedWeek = weekNum || currentWeek;
@@ -978,7 +975,7 @@ export default function LecturerDashboard({ user, onLogout }) {
         DeviceName: record.deviceName || '',
         Time: record.timeVerified,
         Status: record.status || "Verified",
-        Method: record.method || "Bluetooth"
+        Method: record.method || "PIN + GPS"
       };
     });
 
@@ -1006,7 +1003,7 @@ export default function LecturerDashboard({ user, onLogout }) {
       DeviceName: student.deviceName || getStudentDeviceName(student.studentID),
       Time: '',
       Status: 'Absent',
-      Method: 'Bluetooth'
+      Method: 'PIN + GPS'
     }));
 
     return [...presentRows, ...absentRows];
@@ -1121,7 +1118,7 @@ export default function LecturerDashboard({ user, onLogout }) {
   }, [view, activeCourse, loadCourseHistory]);
 
   const currentSessionKey = activeCourse ? getSessionKey(activeCourse.code, currentWeek) : '';
-  const currentSessionName = activeCourse ? getSessionName(activeCourse.code, currentWeek) : '';
+  const currentSessionPin = activeSession?.currentPin || '----';
   const currentRecords = useMemo(() => attendance[currentSessionKey] || [], [attendance, currentSessionKey]);
   const sortedCurrentRecords = useMemo(() => sortByStudentId(currentRecords, 'asc'), [currentRecords]);
   const filteredHistoryRows = useMemo(() => {
@@ -1390,22 +1387,22 @@ export default function LecturerDashboard({ user, onLogout }) {
             <div className="table-card" style={{borderLeft: `6px solid ${activeSession?.active ? 'var(--knust-green)' : 'var(--knust-yellow)'}`}}>
               <div style={{display: 'flex', justifyContent: 'space-between', gap: '20px', alignItems: 'center', flexWrap: 'wrap'}}>
                 <div style={{display: 'flex', gap: '14px', alignItems: 'center'}}>
-                  <Bluetooth size={34} color="var(--knust-blue)" />
+                  <KeyRound size={34} color="var(--knust-blue)" />
                   <div>
-                    <h3 style={{fontSize: '1rem', color: 'var(--knust-blue)', marginBottom: '4px'}}>Bluetooth Attendance Session</h3>
-                    <p style={{color: 'var(--text-muted)', fontSize: '0.9rem'}}>Beacon name prefix: <strong>{currentSessionName}</strong></p>
-                    <p style={{color: 'var(--text-muted)', fontSize: '0.8rem'}}>Service UUID: {BLE_SERVICE_UUID}</p>
+                    <h3 style={{fontSize: '1rem', color: 'var(--knust-blue)', marginBottom: '4px'}}>PIN + GPS Attendance Session</h3>
+                    <p style={{color: 'var(--text-muted)', fontSize: '0.9rem'}}>Current PIN: <strong style={{fontSize: '1.35rem', letterSpacing: '3px'}}>{currentSessionPin}</strong></p>
+                    <p style={{color: 'var(--text-muted)', fontSize: '0.8rem'}}>Rotates every 15 seconds. GPS threshold: {PIN_DISTANCE_METERS}m.</p>
                   </div>
                 </div>
 
                 <button
-                  onClick={activeSession?.active ? endBleSession : startBleSession}
+                  onClick={activeSession?.active ? endBleSession : startPinSession}
                   disabled={isBleBusy}
                   className={`scan-btn-master ${activeSession?.active ? 'is-active' : ''}`}
                   style={{minWidth: '220px'}}
                 >
-                  {activeSession?.active ? <Power size={18} /> : <Bluetooth size={18} />}
-                  {isBleBusy ? 'Processing...' : activeSession?.active ? 'End Session' : 'Start BLE Session'}
+                  {activeSession?.active ? <Power size={18} /> : <MapPin size={18} />}
+                  {isBleBusy ? 'Processing...' : activeSession?.active ? 'End Session' : 'Start PIN Session'}
                 </button>
               </div>
 
@@ -1416,14 +1413,6 @@ export default function LecturerDashboard({ user, onLogout }) {
                   style={{background: 'var(--knust-blue)', padding: '10px 16px'}}
                 >
                   <QrCode size={18} /> {isQrFallbackOpen ? 'Close QR Fallback' : 'Open QR Fallback'}
-                </button>
-                <button
-                  onClick={markNearbyStudentDevice}
-                  disabled={isBleBusy}
-                  className="btn-download"
-                  style={{background: 'var(--knust-green)', padding: '10px 16px', opacity: isBleBusy ? 0.7 : 1}}
-                >
-                  <Bluetooth size={18} /> Pick Up Student Device
                 </button>
               </div>
 
@@ -1478,7 +1467,7 @@ export default function LecturerDashboard({ user, onLogout }) {
                         <td><div className="student-cell"><span className="s-id">{s.studentID}</span><span className="s-name">{s.fullName}</span></div></td>
                         <td><div className="student-cell"><span className="s-id">{s.indexNumber || 'N/A'}</span><span className="s-name">{s.referenceNumber || 'No ref'}</span></div></td>
                         <td>{s.timeVerified}</td>
-                        <td>{s.method || 'Bluetooth'}</td>
+                        <td>{s.method || 'PIN + GPS'}</td>
                         <td><span className="status-tag-verified" style={{display: 'flex', alignItems: 'center', gap: '5px', width: 'fit-content'}}><CheckCircle size={12}/> Verified</span></td>
                       </tr>
                     ))}
@@ -1645,7 +1634,7 @@ export default function LecturerDashboard({ user, onLogout }) {
                       <td><div className="student-cell"><span className="s-id">{s.indexNumber || 'N/A'}</span><span className="s-name">{s.referenceNumber || 'No ref'}</span></div></td>
                       <td><div style={{display: 'flex', alignItems: 'center', gap: '8px'}}><CalendarDays size={14} /> Week {s.week}</div></td>
                       <td>{s.dateTime || s.timeVerified || s.sessionDate}</td>
-                      <td>{s.method || 'Bluetooth'}</td>
+                      <td>{s.method || 'PIN + GPS'}</td>
                       <td><span className="status-tag-verified">Verified</span></td>
                     </tr>
                   ))}
