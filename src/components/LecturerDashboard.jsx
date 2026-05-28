@@ -1,6 +1,6 @@
 import React, { useCallback, useMemo, useState, useEffect } from 'react';
 import Scanner from './Scanner';
-import readXlsxFile from 'read-excel-file/browser';
+import { readSheet } from 'read-excel-file/browser';
 import { motion } from 'framer-motion';
 import {
   Search,
@@ -108,11 +108,51 @@ const FIRST_NAME_ALIASES = ['firstname', 'firstnames', 'givenname'];
 const LAST_NAME_ALIASES = ['lastname', 'surname', 'familyname'];
 const DEVICE_NAME_ALIASES = ['devicename', 'bluetoothname', 'bledevicename'];
 
-const parseCsvRows = (text) => {
+const countDelimiterOutsideQuotes = (line, delimiter) => {
+  let count = 0;
+  let inQuotes = false;
+
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index];
+    const nextChar = line[index + 1];
+
+    if (char === '"' && inQuotes && nextChar === '"') {
+      index += 1;
+      continue;
+    }
+
+    if (char === '"') {
+      inQuotes = !inQuotes;
+      continue;
+    }
+
+    if (!inQuotes && char === delimiter) count += 1;
+  }
+
+  return count;
+};
+
+const detectDelimiter = (text) => {
+  const sampleLines = text
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(Boolean)
+    .slice(0, 20);
+  const candidates = [',', ';', '\t', '|'];
+  const scores = candidates.map(delimiter => ({
+    delimiter,
+    score: sampleLines.reduce((sum, line) => sum + countDelimiterOutsideQuotes(line, delimiter), 0)
+  }));
+
+  return scores.sort((a, b) => b.score - a.score)[0]?.delimiter || ',';
+};
+
+const parseDelimitedRows = (text) => {
   const rows = [];
   let row = [];
   let value = '';
   let inQuotes = false;
+  const delimiter = detectDelimiter(text);
 
   for (let index = 0; index < text.length; index += 1) {
     const char = text[index];
@@ -135,7 +175,7 @@ const parseCsvRows = (text) => {
       continue;
     }
 
-    if (char === ',') {
+    if (char === delimiter) {
       row.push(value);
       value = '';
       continue;
@@ -195,8 +235,8 @@ const readRosterRows = async (file) => {
   }
 
   const rows = extension === 'csv'
-    ? parseCsvRows(await file.text())
-    : await readXlsxFile(file);
+    ? parseDelimitedRows(await file.text())
+    : await readSheet(file);
 
   const normalizedRows = normalizeRosterRows(rows);
 
@@ -208,8 +248,20 @@ const readRosterRows = async (file) => {
 };
 
 const findHeaderIndex = (headers, aliases) => (
-  headers.findIndex(header => aliases.includes(normalizeHeader(header)))
+  headers.findIndex(header => {
+    const normalizedHeader = normalizeHeader(header);
+    return aliases.includes(normalizedHeader);
+  })
 );
+
+const looksLikeStudentId = (value) => /^\d{8}$/.test(cleanIdentifier(value));
+const looksLikeIndexNumber = (value) => /^\d{5,8}$/.test(cleanIdentifier(value));
+const looksLikeStudentName = (value) => {
+  const text = cleanDisplayText(value);
+  return /^[A-Za-z][A-Za-z\s.'-]{3,}$/.test(text)
+    && text.split(/\s+/).length >= 2
+    && !/university|science|technology|semester|course|lecturer|programme|general|campus/i.test(text);
+};
 
 const getRosterHeaderInfo = (rows) => {
   let bestMatch = null;
@@ -252,7 +304,39 @@ const getRosterHeaderInfo = (rows) => {
     }
   });
 
-  return bestMatch;
+  if (bestMatch) return bestMatch;
+
+  for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
+    const row = rows[rowIndex];
+    const studentIdIndex = row.findIndex(looksLikeStudentId);
+    if (studentIdIndex < 0) continue;
+
+    const indexNumberIndex = row.findIndex((cell, cellIndex) => (
+      cellIndex !== studentIdIndex && looksLikeIndexNumber(cell)
+    ));
+    const nameIndex = row.findIndex((cell, cellIndex) => (
+      cellIndex !== studentIdIndex
+      && cellIndex !== indexNumberIndex
+      && looksLikeStudentName(cell)
+    ));
+
+    if (nameIndex >= 0) {
+      return {
+        rowIndex,
+        dataStartIndex: rowIndex,
+        score: 3,
+        studentIdIndex,
+        indexNumberIndex,
+        referenceNumberIndex: -1,
+        nameIndex,
+        firstNameIndex: -1,
+        lastNameIndex: -1,
+        deviceNameIndex: -1
+      };
+    }
+  }
+
+  return null;
 };
 
 const parseQrPayload = (rawResult) => {
@@ -432,7 +516,7 @@ export default function LecturerDashboard({ user, onLogout }) {
 
     const studentsById = new Map();
 
-    rows.slice(headerInfo.rowIndex + 1).forEach(row => {
+    rows.slice(headerInfo.dataStartIndex ?? headerInfo.rowIndex + 1).forEach(row => {
       const studentIDFromFile = headerInfo.studentIdIndex >= 0
         ? cleanIdentifier(row[headerInfo.studentIdIndex])
         : '';
