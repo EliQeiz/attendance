@@ -14,7 +14,7 @@ import {
 } from 'firebase/firestore';
 
 const MotionDiv = motion.div;
-const PIN_WINDOW_MS = 15 * 1000;
+const PIN_WINDOW_MS = 60 * 1000;
 const LOCATION_THRESHOLD_METERS = 40;
 
 const toRadians = (degrees) => degrees * (Math.PI / 180);
@@ -363,7 +363,7 @@ export default function StudentDashboard({ user, onLogout }) {
             fontWeight: 600
           }}>
             {selectedSession
-              ? `${selectedSession.originalCourseCode || selectedSession.courseCode} Week ${selectedSession.weekNumber}: PIN refreshes every 15 seconds`
+              ? `${selectedSession.originalCourseCode || selectedSession.courseCode} Week ${selectedSession.weekNumber}: PIN refreshes every 60 seconds`
               : 'Waiting for a lecturer to start a PIN session.'}
           </div>
 

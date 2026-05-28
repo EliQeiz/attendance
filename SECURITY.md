@@ -14,7 +14,7 @@
 - Lecturer accounts are blocked by Firestore rules unless pre-approved.
 - Attendance writes are role-gated, roster-gated, session-gated, and duplicate-protected by document ID.
 - Device reuse is tracked per session through `attendance/{sessionId}/devices/{deviceKey}`.
-- Student verification requires the active 4-digit PIN, a fresh 15-second PIN window, and a Haversine distance check within 40 meters of the lecturer GPS coordinate.
+- Student verification requires the active 4-digit PIN, a fresh 60-second PIN window, and a Haversine distance check within 40 meters of the lecturer GPS coordinate.
 - CSV exports neutralize spreadsheet formulas to reduce CSV injection risk.
 - Roster uploads are restricted to CSV/XLSX with file size and row count limits.
 - Vercel response headers deny framing, reduce MIME sniffing, narrow referrer leakage, and restrict browser permissions.

@@ -50,7 +50,7 @@ import {
 
 const MotionDiv = motion.div;
 const WEEKS = Array.from({ length: 15 }, (_, i) => i + 1);
-const PIN_WINDOW_MS = 15 * 1000;
+const PIN_WINDOW_MS = 60 * 1000;
 const PIN_DISTANCE_METERS = 40;
 const MAX_ROSTER_FILE_BYTES = 2 * 1024 * 1024;
 const MAX_ROSTER_ROWS = 5000;
@@ -944,7 +944,7 @@ export default function LecturerDashboard({ user, onLogout }) {
     }, { merge: true });
 
     if (!silent) {
-      setBleStatus(`PIN refreshed: ${currentPin}. It expires in 15 seconds.`);
+      setBleStatus(`PIN refreshed: ${currentPin}. It expires in 60 seconds.`);
     }
   }, [activeCourse, currentWeek]);
 
@@ -998,7 +998,7 @@ export default function LecturerDashboard({ user, onLogout }) {
         locationUpdatedAt: serverTimestamp()
       }, { merge: true });
 
-      setBleStatus(`Session active. Current PIN: ${currentPin}. It will rotate every 15 seconds.`);
+      setBleStatus(`Session active. Current PIN: ${currentPin}. It will rotate every 60 seconds.`);
     } catch (error) {
       console.error("Unable to start PIN session:", error);
       setBleStatus(error?.code === 1
@@ -1495,7 +1495,7 @@ export default function LecturerDashboard({ user, onLogout }) {
                   <div>
                     <h3 style={{fontSize: '1rem', color: 'var(--knust-blue)', marginBottom: '4px'}}>PIN + GPS Attendance Session</h3>
                     <p style={{color: 'var(--text-muted)', fontSize: '0.9rem'}}>Current PIN: <strong style={{fontSize: '1.35rem', letterSpacing: '3px'}}>{currentSessionPin}</strong></p>
-                    <p style={{color: 'var(--text-muted)', fontSize: '0.8rem'}}>Rotates every 15 seconds. GPS threshold: {PIN_DISTANCE_METERS}m.</p>
+                    <p style={{color: 'var(--text-muted)', fontSize: '0.8rem'}}>Rotates every 60 seconds. GPS threshold: {PIN_DISTANCE_METERS}m.</p>
                   </div>
                 </div>
 
