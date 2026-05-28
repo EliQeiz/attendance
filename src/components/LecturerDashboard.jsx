@@ -79,8 +79,9 @@ const getCurrentPosition = () => (
   })
 );
 
-const normalizeHeader = (value = '') => value.toString().trim().toLowerCase().replace(/[^a-z0-9]/g, '');
-const cleanCell = (value = '') => value.toString().trim().replace(/\.0$/, '');
+const stringifyCell = (value) => (value == null ? '' : String(value));
+const normalizeHeader = (value = '') => stringifyCell(value).trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+const cleanCell = (value = '') => stringifyCell(value).trim().replace(/\.0$/, '');
 const cleanIdentifier = (value = '') => cleanCell(value).replace(/\s+/g, '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 32);
 const stripControlCharacters = (value = '') => (
   Array.from(String(value), char => {
