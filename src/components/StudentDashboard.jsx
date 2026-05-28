@@ -185,6 +185,7 @@ export default function StudentDashboard({ user, onLogout }) {
 
       const result = await runTransaction(db, async (transaction) => {
         const sessionSnap = await transaction.get(sessionRef);
+        let rosterStudent = null;
 
         if (!sessionSnap.exists()) {
           throw new Error('This attendance session no longer exists.');
@@ -239,11 +240,19 @@ export default function StudentDashboard({ user, onLogout }) {
           if (!rosterSnap.exists()) {
             throw new Error('Your student ID is not on this course roster. Ask the lecturer to add you before verifying.');
           }
+
+          rosterStudent = rosterSnap.data();
         }
 
+        const resolvedStudentID = rosterStudent?.studentID || studentId;
+        const resolvedFullName = rosterStudent?.fullName || rosterStudent?.name || user.name;
+        const resolvedDeviceName = rosterStudent?.deviceName || studentDeviceName;
+
         transaction.set(recordRef, {
-          studentID: studentId,
-          fullName: user.name,
+          studentID: resolvedStudentID,
+          indexNumber: rosterStudent?.indexNumber || '',
+          referenceNumber: rosterStudent?.referenceNumber || '',
+          fullName: resolvedFullName,
           timeVerified: now.toLocaleTimeString(),
           verifiedAt: serverTimestamp(),
           verifiedAtIso: now.toISOString(),
@@ -254,7 +263,7 @@ export default function StudentDashboard({ user, onLogout }) {
           courseCode: liveSession.courseCode,
           week: liveSession.weekNumber,
           sessionKey: selectedSession.id,
-          deviceName: studentDeviceName,
+          deviceName: resolvedDeviceName,
           deviceKey,
           studentLocation,
           lecturerLocation,
@@ -263,9 +272,9 @@ export default function StudentDashboard({ user, onLogout }) {
         }, { merge: true });
 
         transaction.set(deviceRef, {
-          studentID: studentId,
-          fullName: user.name,
-          deviceName: studentDeviceName,
+          studentID: resolvedStudentID,
+          fullName: resolvedFullName,
+          deviceName: resolvedDeviceName,
           verifiedAt: serverTimestamp()
         }, { merge: true });
 

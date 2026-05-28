@@ -166,6 +166,23 @@ const parseCsvRows = (text) => {
   return rows.map(csvRow => csvRow.map(cell => cleanCell(cell)));
 };
 
+const normalizeRosterRow = (row) => {
+  if (Array.isArray(row)) return row;
+  if (row && typeof row === 'object') return Object.values(row);
+  if (row == null) return [];
+  return [row];
+};
+
+const normalizeRosterRows = (rows) => {
+  if (!Array.isArray(rows)) {
+    throw new Error('Roster parser returned an invalid table. Please upload a CSV or XLSX table.');
+  }
+
+  return rows
+    .map(normalizeRosterRow)
+    .filter(row => row.some(cell => cleanCell(cell)));
+};
+
 const readRosterRows = async (file) => {
   const extension = file.name.split('.').pop()?.toLowerCase() || '';
 
@@ -181,11 +198,13 @@ const readRosterRows = async (file) => {
     ? parseCsvRows(await file.text())
     : await readXlsxFile(file);
 
-  if (rows.length > MAX_ROSTER_ROWS) {
+  const normalizedRows = normalizeRosterRows(rows);
+
+  if (normalizedRows.length > MAX_ROSTER_ROWS) {
     throw new Error(`Roster has too many rows. Keep each upload under ${MAX_ROSTER_ROWS} students.`);
   }
 
-  return rows;
+  return normalizedRows;
 };
 
 const findHeaderIndex = (headers, aliases) => (
