@@ -38,7 +38,8 @@ function App() {
           knust_id: knustId,
           name: profile.name || firebaseUser.displayName || "KNUST User",
           role: profile.role,
-          email: profile.email || firebaseUser.email || ""
+          email: profile.email || firebaseUser.email || "",
+          recoveryEmail: profile.recoveryEmail || profile.email || firebaseUser.email || ""
         });
       } catch (error) {
         console.error("Failed to restore auth session:", error);

@@ -62,12 +62,17 @@ service cloud.firestore {
           'role',
           'email',
           'authEmail',
+          'recoveryEmail',
           'createdAt',
           'updatedAt'
         ])
         && request.resource.data.name is string
         && request.resource.data.knust_id is string
         && request.resource.data.login_id is string
+        && request.resource.data.recoveryEmail is string
+        && request.resource.data.email == request.auth.token.email
+        && request.resource.data.authEmail == request.auth.token.email
+        && request.resource.data.recoveryEmail == request.auth.token.email
         && request.resource.data.role in ['student', 'lecturer'];
     }
 
@@ -98,6 +103,23 @@ service cloud.firestore {
         && request.resource.data.login_id == resource.data.login_id;
 
       allow delete: if false;
+    }
+
+    match /studentAccounts/{studentId} {
+      allow create: if signedIn()
+        && studentId.matches('^[0-9]{8}$')
+        && request.resource.data.keys().hasOnly([
+          'uid',
+          'knust_id',
+          'recoveryEmail',
+          'createdAt'
+        ])
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.knust_id == studentId
+        && request.resource.data.recoveryEmail == request.auth.token.email
+        && getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'student'
+        && getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.knust_id == studentId;
+      allow read, update, delete: if false;
     }
 
     match /courses/{courseId} {

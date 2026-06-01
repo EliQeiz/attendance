@@ -32,6 +32,7 @@ import {
 } from 'lucide-react';
 import { Parser } from '@json2csv/plainjs';
 import { db } from '../firebase';
+import { getRefinedPosition, requireUsableGpsAccuracy, toLocationRecord } from '../utils/geolocation';
 import {
   collection,
   query,
@@ -50,8 +51,9 @@ import {
 
 const MotionDiv = motion.div;
 const WEEKS = Array.from({ length: 15 }, (_, i) => i + 1);
-const PIN_WINDOW_MS = 60 * 1000;
-const PIN_DISTANCE_METERS = 40;
+const PIN_WINDOW_MS = 3 * 60 * 1000;
+const PIN_DISTANCE_METERS = 100;
+const QR_WINDOW_MS = 3 * 60 * 1000;
 const MAX_ROSTER_FILE_BYTES = 2 * 1024 * 1024;
 const MAX_ROSTER_ROWS = 5000;
 const SUPPORTED_ROSTER_EXTENSIONS = ['csv', 'xlsx'];
@@ -59,26 +61,12 @@ const SUPPORTED_ROSTER_EXTENSIONS = ['csv', 'xlsx'];
 const normalizeCourseCode = (code = '') => code.replace(/\s+/g, '').toUpperCase();
 const getSessionKey = (courseCode, weekNumber) => `${normalizeCourseCode(courseCode)}-W${weekNumber}`;
 const getStudentDeviceName = (studentID) => `KNUST_STU_${studentID}`;
+const formatCountdown = (seconds = 0) => `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
 const generatePin = () => {
   const entropy = new Uint32Array(1);
   globalThis.crypto.getRandomValues(entropy);
   return String(entropy[0] % 10000).padStart(4, '0');
 };
-const getCurrentPosition = () => (
-  new Promise((resolve, reject) => {
-    if (!navigator.geolocation) {
-      reject(new Error('This browser does not support GPS location.'));
-      return;
-    }
-
-    navigator.geolocation.getCurrentPosition(resolve, reject, {
-      enableHighAccuracy: true,
-      maximumAge: 0,
-      timeout: 10000
-    });
-  })
-);
-
 const stringifyCell = (value) => (value == null ? '' : String(value));
 const normalizeHeader = (value = '') => stringifyCell(value).trim().toLowerCase().replace(/[^a-z0-9]/g, '');
 const cleanCell = (value = '') => stringifyCell(value).trim().replace(/\.0$/, '');
@@ -344,9 +332,11 @@ const parseQrPayload = (rawResult) => {
   try {
     const parsed = JSON.parse(rawResult);
     return {
+      type: cleanCell(parsed.type),
       studentID: cleanCell(parsed.studentID || parsed.knust_id || parsed.id),
       fullName: cleanCell(parsed.fullName || parsed.name),
       sessionKey: cleanCell(parsed.sessionKey),
+      issuedAtMs: Number(parsed.issuedAtMs) || 0,
       method: 'QR'
     };
   } catch {
@@ -354,9 +344,11 @@ const parseQrPayload = (rawResult) => {
     const nameMatch = rawResult.match(/Name:\s*([^|]+)/i);
 
     return {
+      type: '',
       studentID: idMatch ? cleanCell(idMatch[1]) : '',
       fullName: nameMatch ? cleanCell(nameMatch[1]) : '',
       sessionKey: '',
+      issuedAtMs: 0,
       method: 'QR'
     };
   }
@@ -399,6 +391,7 @@ export default function LecturerDashboard({ user, onLogout }) {
   const [activeCourse, setActiveCourse] = useState(null);
   const [currentWeek, setCurrentWeek] = useState(1);
   const [activeSession, setActiveSession] = useState(null);
+  const [pinSecondsRemaining, setPinSecondsRemaining] = useState(0);
   const [bleStatus, setBleStatus] = useState('');
   const [isBleBusy, setIsBleBusy] = useState(false);
   const [isQrFallbackOpen, setIsQrFallbackOpen] = useState(false);
@@ -409,6 +402,11 @@ export default function LecturerDashboard({ user, onLogout }) {
     indexNumber: '',
     referenceNumber: '',
     fullName: ''
+  });
+  const [manualVerification, setManualVerification] = useState({
+    studentID: '',
+    fullName: '',
+    reason: ''
   });
   const [historyRows, setHistoryRows] = useState([]);
   const [historySummary, setHistorySummary] = useState([]);
@@ -731,7 +729,7 @@ export default function LecturerDashboard({ user, onLogout }) {
     }, { merge: true });
   };
 
-  const recordAttendance = async ({ studentID, fullName, method, deviceName }) => {
+  const recordAttendance = async ({ studentID, fullName, method, deviceName, verificationNote = '' }) => {
     if (!activeCourse || !studentID) return { ok: false, reason: 'missing-student' };
     if (!activeSession?.active) return { ok: false, reason: 'inactive-session' };
 
@@ -761,7 +759,7 @@ export default function LecturerDashboard({ user, onLogout }) {
       studentID: resolvedStudentID,
       indexNumber: roster?.indexNumber || '',
       referenceNumber: roster?.referenceNumber || '',
-      fullName: cleanDisplayText(fullName) || roster?.fullName || roster?.name || `Student ${resolvedStudentID}`,
+      fullName: roster?.fullName || roster?.name || cleanDisplayText(fullName) || `Student ${resolvedStudentID}`,
       deviceName: cleanDisplayText(deviceName, 80) || roster?.deviceName || getStudentDeviceName(resolvedStudentID),
       timeVerified: now.toLocaleTimeString(),
       verifiedAt: serverTimestamp(),
@@ -770,12 +768,106 @@ export default function LecturerDashboard({ user, onLogout }) {
       status: "Verified",
       timestamp: serverTimestamp(),
       method,
+      verificationNote: cleanDisplayText(verificationNote, 160),
+      verifiedBy: user.id,
+      verifiedByName: user.name,
       week: currentWeek,
       courseCode: normalizeCourseCode(activeCourse.code),
       sessionKey
     }, { merge: true });
 
     return { ok: true, studentID: resolvedStudentID };
+  };
+
+  const ensureManualVerificationRosterStudent = async ({ studentID, fullName }) => {
+    const cleanedStudentID = cleanIdentifier(studentID);
+    const cleanedFullName = cleanDisplayText(fullName);
+    const existingStudent = await getRosterStudentByIdentifier(cleanedStudentID);
+
+    if (existingStudent) return existingStudent;
+
+    const student = {
+      studentID: cleanedStudentID,
+      knust_id: cleanedStudentID,
+      indexNumber: '',
+      referenceNumber: cleanedStudentID,
+      fullName: cleanedFullName,
+      name: cleanedFullName,
+      deviceName: getStudentDeviceName(cleanedStudentID),
+      alternateDeviceNames: [getStudentDeviceName(cleanedStudentID)],
+      courseId: activeCourse.id,
+      courseCode: normalizeCourseCode(activeCourse.code),
+      manuallyAdded: true,
+      addedDuringVerification: true,
+      updatedAt: serverTimestamp()
+    };
+
+    await setDoc(doc(db, "courses", activeCourse.id, "students", cleanedStudentID), student, { merge: true });
+    const rosterSnapshot = await getDocs(collection(db, "courses", activeCourse.id, "students"));
+    await setDoc(doc(db, "courses", activeCourse.id), {
+      rosterCount: rosterSnapshot.size,
+      rosterUpdatedAt: serverTimestamp()
+    }, { merge: true });
+    setActiveCourse(prev => prev?.id === activeCourse.id
+      ? { ...prev, rosterCount: rosterSnapshot.size }
+      : prev
+    );
+
+    return student;
+  };
+
+  const handleManualPresenceVerification = async (event) => {
+    event.preventDefault();
+
+    if (!activeSession?.active) {
+      setBleStatus('Start the attendance session before manually verifying a student.');
+      return;
+    }
+
+    const studentID = cleanIdentifier(manualVerification.studentID);
+    const fullName = cleanDisplayText(manualVerification.fullName);
+    const reason = cleanDisplayText(manualVerification.reason, 160);
+
+    if (!/^\d{6,12}$/.test(studentID) || !fullName || !reason) {
+      setBleStatus('Manual verification requires a valid student ID, full name, and reason.');
+      return;
+    }
+
+    setIsBleBusy(true);
+
+    try {
+      const rosterStudent = await ensureManualVerificationRosterStudent({ studentID, fullName });
+      const result = await recordAttendance({
+        studentID: rosterStudent.studentID,
+        fullName: rosterStudent.fullName || fullName,
+        method: 'LECTURER_MANUAL',
+        verificationNote: reason
+      });
+
+      if (result.alreadyVerified) {
+        setBleStatus(`${rosterStudent.fullName || fullName} was already verified for this session.`);
+        return;
+      }
+
+      if (!result.ok) {
+        setBleStatus('Manual verification could not be saved. Check the active session and student details.');
+        return;
+      }
+
+      await recordCorrectionAudit({
+        weekNumber: currentWeek,
+        studentID: result.studentID,
+        fullName: rosterStudent.fullName || fullName,
+        action: `lecturer-manual-present: ${reason}`
+      });
+      setManualVerification({ studentID: '', fullName: '', reason: '' });
+      setBleStatus(`${rosterStudent.fullName || fullName} verified manually by lecturer.`);
+    } catch (error) {
+      console.error('Manual attendance verification failed:', error);
+      setBleStatus('Manual verification failed. Please check Firebase permissions and try again.');
+    } finally {
+      setIsBleBusy(false);
+    }
   };
 
   const recordCorrectionAudit = async ({ weekNumber, studentID, fullName, action }) => {
@@ -886,15 +978,26 @@ export default function LecturerDashboard({ user, onLogout }) {
         return;
       }
 
+      if (payload.type !== 'KNUST_ATTENDANCE') {
+        setBleStatus('QR fallback blocked. Ask the student to display the current in-app attendance QR code.');
+        return;
+      }
+
       if (payload.sessionKey && payload.sessionKey !== currentSessionKey) {
         setBleStatus('QR fallback blocked. This student code belongs to a different course or week.');
+        return;
+      }
+
+      if (!payload.issuedAtMs || payload.issuedAtMs > Date.now() + 30000 || Date.now() - payload.issuedAtMs > QR_WINDOW_MS) {
+        setBleStatus('QR fallback blocked. The student QR code has expired. Ask the student to refresh the code.');
         return;
       }
 
       const result = await recordAttendance({
         studentID: payload.studentID,
         fullName: payload.fullName,
-        method: 'QR'
+        method: 'QR_FALLBACK',
+        verificationNote: 'Lecturer scanned student in-app QR fallback.'
       });
 
       if (result.alreadyVerified) {
@@ -923,7 +1026,7 @@ export default function LecturerDashboard({ user, onLogout }) {
     if (!activeCourse) return;
 
     const sessionKey = getSessionKey(activeCourse.code, currentWeek);
-    const position = await getCurrentPosition();
+    const position = requireUsableGpsAccuracy(await getRefinedPosition());
     const nowMs = Date.now();
     const currentPin = generatePin();
 
@@ -933,18 +1036,13 @@ export default function LecturerDashboard({ user, onLogout }) {
       pinExpiresAtMs: nowMs + PIN_WINDOW_MS,
       pinWindowMs: PIN_WINDOW_MS,
       locationThresholdMeters: PIN_DISTANCE_METERS,
-      lecturerLocation: {
-        latitude: position.coords.latitude,
-        longitude: position.coords.longitude,
-        accuracy: position.coords.accuracy,
-        capturedAtMs: nowMs
-      },
+      lecturerLocation: toLocationRecord(position, nowMs),
       pinGeneratedAt: serverTimestamp(),
       locationUpdatedAt: serverTimestamp()
     }, { merge: true });
 
     if (!silent) {
-      setBleStatus(`PIN refreshed: ${currentPin}. It expires in 60 seconds.`);
+      setBleStatus(`PIN refreshed: ${currentPin}. It expires in 3 minutes.`);
     }
   }, [activeCourse, currentWeek]);
 
@@ -964,7 +1062,7 @@ export default function LecturerDashboard({ user, onLogout }) {
       const now = new Date();
       const nowMs = Date.now();
       const currentPin = generatePin();
-      const position = await getCurrentPosition();
+      const position = requireUsableGpsAccuracy(await getRefinedPosition());
 
       await setDoc(doc(db, "attendance", sessionKey), {
         active: true,
@@ -984,12 +1082,7 @@ export default function LecturerDashboard({ user, onLogout }) {
         pinExpiresAtMs: nowMs + PIN_WINDOW_MS,
         pinWindowMs: PIN_WINDOW_MS,
         locationThresholdMeters: PIN_DISTANCE_METERS,
-        lecturerLocation: {
-          latitude: position.coords.latitude,
-          longitude: position.coords.longitude,
-          accuracy: position.coords.accuracy,
-          capturedAtMs: nowMs
-        },
+        lecturerLocation: toLocationRecord(position, nowMs),
         startedAt: serverTimestamp(),
         startedAtIso: now.toISOString(),
         sessionDate: now.toLocaleDateString(),
@@ -998,12 +1091,12 @@ export default function LecturerDashboard({ user, onLogout }) {
         locationUpdatedAt: serverTimestamp()
       }, { merge: true });
 
-      setBleStatus(`Session active. Current PIN: ${currentPin}. It will rotate every 60 seconds.`);
+      setBleStatus(`Session active. Current PIN: ${currentPin}. It will rotate every 3 minutes.`);
     } catch (error) {
       console.error("Unable to start PIN session:", error);
       setBleStatus(error?.code === 1
         ? 'Location permission is required to start a PIN + GPS session.'
-        : 'Unable to start PIN + GPS session. Please check location and Firebase permissions.'
+        : error.message || 'Unable to start PIN + GPS session. Please check location and Firebase permissions.'
       );
     } finally {
       setIsBleBusy(false);
@@ -1061,6 +1154,21 @@ export default function LecturerDashboard({ user, onLogout }) {
 
     return () => window.clearInterval(rotationTimer);
   }, [activeCourse, activeSession?.active, activeSession?.method, refreshPinSession]);
+
+  useEffect(() => {
+    if (!activeSession?.active || !activeSession.pinExpiresAtMs) {
+      setPinSecondsRemaining(0);
+      return;
+    }
+
+    const updateCountdown = () => {
+      setPinSecondsRemaining(Math.max(0, Math.ceil((activeSession.pinExpiresAtMs - Date.now()) / 1000)));
+    };
+    updateCountdown();
+    const countdownTimer = window.setInterval(updateCountdown, 1000);
+
+    return () => window.clearInterval(countdownTimer);
+  }, [activeSession?.active, activeSession?.pinExpiresAtMs]);
 
   const buildExportRows = async (weekNum) => {
     const selectedWeek = weekNum || currentWeek;
@@ -1495,7 +1603,10 @@ export default function LecturerDashboard({ user, onLogout }) {
                   <div>
                     <h3 style={{fontSize: '1rem', color: 'var(--knust-blue)', marginBottom: '4px'}}>PIN + GPS Attendance Session</h3>
                     <p style={{color: 'var(--text-muted)', fontSize: '0.9rem'}}>Current PIN: <strong style={{fontSize: '1.35rem', letterSpacing: '3px'}}>{currentSessionPin}</strong></p>
-                    <p style={{color: 'var(--text-muted)', fontSize: '0.8rem'}}>Rotates every 60 seconds. GPS threshold: {PIN_DISTANCE_METERS}m.</p>
+                    <p style={{color: 'var(--text-muted)', fontSize: '0.8rem'}}>
+                      Next rotation: {formatCountdown(pinSecondsRemaining)}. GPS threshold: {PIN_DISTANCE_METERS}m.
+                      {activeSession?.lecturerLocation?.accuracy ? ` Accuracy: +/-${activeSession.lecturerLocation.accuracy}m.` : ''}
+                    </p>
                   </div>
                 </div>
 
@@ -1542,6 +1653,33 @@ export default function LecturerDashboard({ user, onLogout }) {
                   <Scanner onResult={handleQrScanSuccess} onClose={() => setIsQrFallbackOpen(false)} />
                 </div>
               )}
+
+              <form onSubmit={handleManualPresenceVerification} className="manual-student-form" style={{display: 'grid', gridTemplateColumns: 'minmax(140px, 0.8fr) minmax(180px, 1.2fr) minmax(220px, 1.5fr) auto', gap: '12px', marginTop: '18px'}}>
+                <input
+                  className="pro-input"
+                  placeholder="Student ID"
+                  value={manualVerification.studentID}
+                  onChange={(event) => setManualVerification({...manualVerification, studentID: event.target.value})}
+                  required
+                />
+                <input
+                  className="pro-input"
+                  placeholder="Full Name"
+                  value={manualVerification.fullName}
+                  onChange={(event) => setManualVerification({...manualVerification, fullName: event.target.value})}
+                  required
+                />
+                <input
+                  className="pro-input"
+                  placeholder="Reason for manual verification"
+                  value={manualVerification.reason}
+                  onChange={(event) => setManualVerification({...manualVerification, reason: event.target.value})}
+                  required
+                />
+                <button type="submit" disabled={isBleBusy} className="pro-btn-primary" style={{display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px'}}>
+                  <UserPlus size={18} /> Verify Present
+                </button>
+              </form>
             </div>
 
             <div className="action-row" style={{display: 'flex', gap: '15px', marginBottom: '25px'}}>

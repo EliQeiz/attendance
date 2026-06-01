@@ -16,6 +16,7 @@ export default function Scanner({ onResult, onClose }) {
   const [isDragging, setIsDragging] = useState(false);
   const [error, setError] = useState('');
   const scannerRef = useRef(null);
+  const isHandlingResultRef = useRef(false);
   const generatedId = useId();
   const readerId = `qr-reader-${generatedId.replace(/:/g, '')}`;
 
@@ -45,8 +46,18 @@ export default function Scanner({ onResult, onClose }) {
   };
 
   const handleScanSuccess = async (decodedText) => {
-    onResult(decodedText);
-    await stopCamera();
+    if (isHandlingResultRef.current) return;
+    isHandlingResultRef.current = true;
+
+    try {
+      await onResult(decodedText);
+      await stopCamera();
+    } catch (scanError) {
+      console.error('QR verification failed:', scanError);
+      setError('The QR code could not be verified. Please try again.');
+    } finally {
+      isHandlingResultRef.current = false;
+    }
   };
 
   const startCamera = async () => {

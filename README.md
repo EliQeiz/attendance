@@ -1,6 +1,6 @@
 # KNUST Lecturer Tracking & Attendance Platform
 
-React + Firebase attendance platform for lecturer-led course sessions with rotating PIN + GPS proximity checks, QR fallback, roster import, attendance history, correction workflows, and CSV export.
+React + Firebase attendance platform for lecturer-led course sessions with rotating PIN + refined GPS proximity checks, QR fallback, lecturer-entered fallback verification, roster import, attendance history, correction workflows, password recovery, and CSV export.
 
 ## Local Development
 

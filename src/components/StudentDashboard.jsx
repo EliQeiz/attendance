@@ -12,10 +12,13 @@ import {
   serverTimestamp,
   where
 } from 'firebase/firestore';
+import { getRefinedPosition, requireUsableGpsAccuracy, toLocationRecord } from '../utils/geolocation';
 
 const MotionDiv = motion.div;
-const PIN_WINDOW_MS = 60 * 1000;
-const LOCATION_THRESHOLD_METERS = 40;
+const PIN_WINDOW_MS = 3 * 60 * 1000;
+const LOCATION_THRESHOLD_METERS = 100;
+const QR_REFRESH_MS = 60 * 1000;
+const formatCountdown = (seconds = 0) => `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
 
 const toRadians = (degrees) => degrees * (Math.PI / 180);
 const getDistanceMeters = (start, end) => {
@@ -30,21 +33,6 @@ const getDistanceMeters = (start, end) => {
 
   return 2 * earthRadiusMeters * Math.atan2(Math.sqrt(haversine), Math.sqrt(1 - haversine));
 };
-
-const getCurrentPosition = () => (
-  new Promise((resolve, reject) => {
-    if (!navigator.geolocation) {
-      reject(new Error('This browser does not support GPS location.'));
-      return;
-    }
-
-    navigator.geolocation.getCurrentPosition(resolve, reject, {
-      enableHighAccuracy: true,
-      maximumAge: 0,
-      timeout: 10000
-    });
-  })
-);
 
 const createDeviceKey = () => {
   const browserCrypto = globalThis.crypto;
@@ -80,6 +68,8 @@ export default function StudentDashboard({ user, onLogout }) {
   const [verifiedSessionKey, setVerifiedSessionKey] = useState('');
   const [existingVerification, setExistingVerification] = useState(null);
   const [pinInput, setPinInput] = useState('');
+  const [qrIssuedAtMs, setQrIssuedAtMs] = useState(() => Date.now());
+  const [pinSecondsRemaining, setPinSecondsRemaining] = useState(0);
 
   useEffect(() => {
     const activeSessionsQuery = query(collection(db, 'attendance'), where('active', '==', true));
@@ -116,11 +106,34 @@ export default function StudentDashboard({ user, onLogout }) {
           fullName: user.name,
           sessionKey: selectedSession.id,
           courseCode: selectedSession.courseCode,
-          week: selectedSession.weekNumber
+          week: selectedSession.weekNumber,
+          issuedAtMs: qrIssuedAtMs
         })
       : ''
-  ), [selectedSession, studentId, user.name]);
+  ), [qrIssuedAtMs, selectedSession, studentId, user.name]);
   const isAlreadyVerified = Boolean(selectedSession && existingVerification?.sessionKey === selectedSession.id);
+
+  useEffect(() => {
+    setQrIssuedAtMs(Date.now());
+    const qrRefreshTimer = window.setInterval(() => setQrIssuedAtMs(Date.now()), QR_REFRESH_MS);
+
+    return () => window.clearInterval(qrRefreshTimer);
+  }, [selectedSession?.id]);
+
+  useEffect(() => {
+    if (!selectedSession?.pinExpiresAtMs) {
+      setPinSecondsRemaining(0);
+      return;
+    }
+
+    const updateCountdown = () => {
+      setPinSecondsRemaining(Math.max(0, Math.ceil((selectedSession.pinExpiresAtMs - Date.now()) / 1000)));
+    };
+    updateCountdown();
+    const countdownTimer = window.setInterval(updateCountdown, 1000);
+
+    return () => window.clearInterval(countdownTimer);
+  }, [selectedSession?.pinExpiresAtMs]);
 
   useEffect(() => {
     if (!selectedSession || !studentId) {
@@ -173,15 +186,10 @@ export default function StudentDashboard({ user, onLogout }) {
     setStatus('Checking PIN and location...');
 
     try {
-      const position = await getCurrentPosition();
+      const position = requireUsableGpsAccuracy(await getRefinedPosition());
       const now = new Date();
       const nowMs = Date.now();
-      const studentLocation = {
-        latitude: position.coords.latitude,
-        longitude: position.coords.longitude,
-        accuracy: position.coords.accuracy,
-        capturedAtMs: nowMs
-      };
+      const studentLocation = toLocationRecord(position, nowMs);
 
       const result = await runTransaction(db, async (transaction) => {
         const sessionSnap = await transaction.get(sessionRef);
@@ -195,7 +203,8 @@ export default function StudentDashboard({ user, onLogout }) {
         const lecturerLocation = liveSession.lecturerLocation;
         const thresholdMeters = liveSession.locationThresholdMeters || LOCATION_THRESHOLD_METERS;
         const issuedAtMs = liveSession.pinGeneratedAt?.toMillis?.() || liveSession.pinIssuedAtMs;
-        const expiresAtMs = issuedAtMs + (liveSession.pinWindowMs || PIN_WINDOW_MS);
+        const sessionPinWindowMs = liveSession.pinWindowMs || PIN_WINDOW_MS;
+        const expiresAtMs = issuedAtMs + sessionPinWindowMs;
 
         if (!liveSession.active || liveSession.method !== 'PIN_GPS') {
           throw new Error('This attendance session is no longer active.');
@@ -205,7 +214,7 @@ export default function StudentDashboard({ user, onLogout }) {
           throw new Error('Invalid PIN. Use the current PIN displayed by the lecturer.');
         }
 
-        if (!issuedAtMs || nowMs > expiresAtMs || nowMs - issuedAtMs > PIN_WINDOW_MS) {
+        if (!issuedAtMs || nowMs > expiresAtMs) {
           throw new Error('This PIN has expired. Enter the newly displayed PIN.');
         }
 
@@ -268,7 +277,7 @@ export default function StudentDashboard({ user, onLogout }) {
           studentLocation,
           lecturerLocation,
           distanceMeters: Math.round(distanceMeters),
-          pinWindowMs: liveSession.pinWindowMs || PIN_WINDOW_MS
+          pinWindowMs: sessionPinWindowMs
         }, { merge: true });
 
         transaction.set(deviceRef, {
@@ -363,7 +372,7 @@ export default function StudentDashboard({ user, onLogout }) {
             fontWeight: 600
           }}>
             {selectedSession
-              ? `${selectedSession.originalCourseCode || selectedSession.courseCode} Week ${selectedSession.weekNumber}: PIN refreshes every 60 seconds`
+              ? `${selectedSession.originalCourseCode || selectedSession.courseCode} Week ${selectedSession.weekNumber}: next PIN in ${formatCountdown(pinSecondsRemaining)}`
               : 'Waiting for a lecturer to start a PIN session.'}
           </div>
 
@@ -455,6 +464,9 @@ export default function StudentDashboard({ user, onLogout }) {
             <div style={{display: 'flex', gap: '10px', alignItems: 'center', justifyContent: 'center', marginBottom: '12px', color: '#003366', fontWeight: 800}}>
               <QrCode size={18} /> QR Backup
             </div>
+            <p style={{color: '#64748b', fontSize: '0.78rem', margin: '0 0 10px', textAlign: 'center'}}>
+              Show this rotating fallback code to the lecturer if PIN + GPS verification is unavailable.
+            </p>
             <QRCodeCanvas
               value={qrValue}
               size={180}
