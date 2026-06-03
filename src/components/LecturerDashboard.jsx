@@ -405,9 +405,10 @@ export default function LecturerDashboard({ user, onLogout }) {
   });
   const [manualVerification, setManualVerification] = useState({
     studentID: '',
-    fullName: '',
     reason: ''
   });
+  const [manualVerificationStudent, setManualVerificationStudent] = useState(null);
+  const [manualVerificationLookupStatus, setManualVerificationLookupStatus] = useState('');
   const [historyRows, setHistoryRows] = useState([]);
   const [historySummary, setHistorySummary] = useState([]);
   const [historySearchTerm, setHistorySearchTerm] = useState('');
@@ -668,7 +669,7 @@ export default function LecturerDashboard({ user, onLogout }) {
     }
   };
 
-  const getRosterStudentByIdentifier = async (identifier) => {
+  const getRosterStudentByIdentifier = useCallback(async (identifier) => {
     const cleanedIdentifier = cleanIdentifier(identifier);
     if (!activeCourse || !cleanedIdentifier) return null;
 
@@ -692,7 +693,45 @@ export default function LecturerDashboard({ user, onLogout }) {
     }
 
     return null;
-  };
+  }, [activeCourse]);
+
+  useEffect(() => {
+    const identifier = cleanIdentifier(manualVerification.studentID);
+    let isCancelled = false;
+
+    setManualVerificationStudent(null);
+
+    if (!activeCourse || identifier.length < 6) {
+      setManualVerificationLookupStatus('');
+      return () => {
+        isCancelled = true;
+      };
+    }
+
+    setManualVerificationLookupStatus('Looking up student...');
+    const lookupTimer = window.setTimeout(async () => {
+      try {
+        const rosterStudent = await getRosterStudentByIdentifier(identifier);
+        if (isCancelled) return;
+
+        if (!rosterStudent) {
+          setManualVerificationLookupStatus('No roster match found for this ID.');
+          return;
+        }
+
+        setManualVerificationStudent(rosterStudent);
+        setManualVerificationLookupStatus(`Matched: ${rosterStudent.fullName || rosterStudent.name || rosterStudent.studentID}`);
+      } catch (error) {
+        console.error('Manual verification lookup failed:', error);
+        if (!isCancelled) setManualVerificationLookupStatus('Unable to look up this student right now.');
+      }
+    }, 300);
+
+    return () => {
+      isCancelled = true;
+      window.clearTimeout(lookupTimer);
+    };
+  }, [activeCourse, getRosterStudentByIdentifier, manualVerification.studentID]);
 
   const updateSessionAbsentees = async (weekNumber) => {
     if (!activeCourse) return;
@@ -779,43 +818,6 @@ export default function LecturerDashboard({ user, onLogout }) {
     return { ok: true, studentID: resolvedStudentID };
   };
 
-  const ensureManualVerificationRosterStudent = async ({ studentID, fullName }) => {
-    const cleanedStudentID = cleanIdentifier(studentID);
-    const cleanedFullName = cleanDisplayText(fullName);
-    const existingStudent = await getRosterStudentByIdentifier(cleanedStudentID);
-
-    if (existingStudent) return existingStudent;
-
-    const student = {
-      studentID: cleanedStudentID,
-      knust_id: cleanedStudentID,
-      indexNumber: '',
-      referenceNumber: cleanedStudentID,
-      fullName: cleanedFullName,
-      name: cleanedFullName,
-      deviceName: getStudentDeviceName(cleanedStudentID),
-      alternateDeviceNames: [getStudentDeviceName(cleanedStudentID)],
-      courseId: activeCourse.id,
-      courseCode: normalizeCourseCode(activeCourse.code),
-      manuallyAdded: true,
-      addedDuringVerification: true,
-      updatedAt: serverTimestamp()
-    };
-
-    await setDoc(doc(db, "courses", activeCourse.id, "students", cleanedStudentID), student, { merge: true });
-    const rosterSnapshot = await getDocs(collection(db, "courses", activeCourse.id, "students"));
-    await setDoc(doc(db, "courses", activeCourse.id), {
-      rosterCount: rosterSnapshot.size,
-      rosterUpdatedAt: serverTimestamp()
-    }, { merge: true });
-    setActiveCourse(prev => prev?.id === activeCourse.id
-      ? { ...prev, rosterCount: rosterSnapshot.size }
-      : prev
-    );
-
-    return student;
-  };
-
   const handleManualPresenceVerification = async (event) => {
     event.preventDefault();
 
@@ -825,27 +827,41 @@ export default function LecturerDashboard({ user, onLogout }) {
     }
 
     const studentID = cleanIdentifier(manualVerification.studentID);
-    const fullName = cleanDisplayText(manualVerification.fullName);
     const reason = cleanDisplayText(manualVerification.reason, 160);
 
-    if (!/^\d{6,12}$/.test(studentID) || !fullName || !reason) {
-      setBleStatus('Manual verification requires a valid student ID, full name, and reason.');
+    if (!/^\d{6,12}$/.test(studentID) || !reason) {
+      setBleStatus('Manual verification requires a valid student ID and reason.');
       return;
     }
 
     setIsBleBusy(true);
 
     try {
-      const rosterStudent = await ensureManualVerificationRosterStudent({ studentID, fullName });
+      const rosterStudent = manualVerificationStudent?.studentID
+        ? manualVerificationStudent
+        : await getRosterStudentByIdentifier(studentID);
+
+      if (!rosterStudent) {
+        setBleStatus(`${studentID} was not found on this course roster. Upload or add the student first, then verify again.`);
+        return;
+      }
+
+      const resolvedFullName = rosterStudent.fullName || rosterStudent.name;
+
+      if (!resolvedFullName) {
+        setBleStatus(`${studentID} was found, but no student name is stored. Update the roster entry before verifying.`);
+        return;
+      }
+
       const result = await recordAttendance({
         studentID: rosterStudent.studentID,
-        fullName: rosterStudent.fullName || fullName,
+        fullName: resolvedFullName,
         method: 'LECTURER_MANUAL',
         verificationNote: reason
       });
 
       if (result.alreadyVerified) {
-        setBleStatus(`${rosterStudent.fullName || fullName} was already verified for this session.`);
+        setBleStatus(`${resolvedFullName} was already verified for this session.`);
         return;
       }
 
@@ -857,11 +873,13 @@ export default function LecturerDashboard({ user, onLogout }) {
       await recordCorrectionAudit({
         weekNumber: currentWeek,
         studentID: result.studentID,
-        fullName: rosterStudent.fullName || fullName,
+        fullName: resolvedFullName,
         action: `lecturer-manual-present: ${reason}`
       });
-      setManualVerification({ studentID: '', fullName: '', reason: '' });
-      setBleStatus(`${rosterStudent.fullName || fullName} verified manually by lecturer.`);
+      setManualVerification({ studentID: '', reason: '' });
+      setManualVerificationStudent(null);
+      setManualVerificationLookupStatus('');
+      setBleStatus(`${resolvedFullName} verified manually by lecturer.`);
     } catch (error) {
       console.error('Manual attendance verification failed:', error);
       setBleStatus('Manual verification failed. Please check Firebase permissions and try again.');
@@ -1654,19 +1672,12 @@ export default function LecturerDashboard({ user, onLogout }) {
                 </div>
               )}
 
-              <form onSubmit={handleManualPresenceVerification} className="manual-student-form" style={{display: 'grid', gridTemplateColumns: 'minmax(140px, 0.8fr) minmax(180px, 1.2fr) minmax(220px, 1.5fr) auto', gap: '12px', marginTop: '18px'}}>
+              <form onSubmit={handleManualPresenceVerification} className="manual-student-form" style={{display: 'grid', gridTemplateColumns: 'minmax(160px, 0.9fr) minmax(240px, 1.5fr) auto', gap: '12px', marginTop: '18px'}}>
                 <input
                   className="pro-input"
                   placeholder="Student ID"
                   value={manualVerification.studentID}
                   onChange={(event) => setManualVerification({...manualVerification, studentID: event.target.value})}
-                  required
-                />
-                <input
-                  className="pro-input"
-                  placeholder="Full Name"
-                  value={manualVerification.fullName}
-                  onChange={(event) => setManualVerification({...manualVerification, fullName: event.target.value})}
                   required
                 />
                 <input
@@ -1679,6 +1690,20 @@ export default function LecturerDashboard({ user, onLogout }) {
                 <button type="submit" disabled={isBleBusy} className="pro-btn-primary" style={{display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px'}}>
                   <UserPlus size={18} /> Verify Present
                 </button>
+                {manualVerificationLookupStatus && (
+                  <div style={{
+                    gridColumn: '1 / -1',
+                    padding: '10px 12px',
+                    borderRadius: '12px',
+                    background: manualVerificationStudent ? '#f0fdf4' : '#fffbeb',
+                    color: manualVerificationStudent ? '#166534' : '#92400e',
+                    border: manualVerificationStudent ? '1px solid #bbf7d0' : '1px solid #fde68a',
+                    fontSize: '0.84rem',
+                    fontWeight: 700
+                  }}>
+                    {manualVerificationLookupStatus}
+                  </div>
+                )}
               </form>
             </div>
 
