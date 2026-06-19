@@ -2,37 +2,21 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { QRCodeCanvas } from 'qrcode.react';
 import { motion } from 'framer-motion';
 import { AlertCircle, CheckCircle, KeyRound, LogOut, MapPin, QrCode } from 'lucide-react';
-import { db } from '../firebase';
+import { db, functions } from '../firebase';
 import {
   collection,
   doc,
   onSnapshot,
   query,
-  runTransaction,
-  serverTimestamp,
   where
 } from 'firebase/firestore';
-import { getRefinedPosition, requireUsableGpsAccuracy, toLocationRecord } from '../utils/geolocation';
+import { httpsCallable } from 'firebase/functions';
+import { getRefinedPosition, requireUsableGpsAccuracy } from '../utils/geolocation';
 
 const MotionDiv = motion.div;
-const PIN_WINDOW_MS = 3 * 60 * 1000;
 const LOCATION_THRESHOLD_METERS = 100;
 const QR_REFRESH_MS = 60 * 1000;
 const formatCountdown = (seconds = 0) => `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
-
-const toRadians = (degrees) => degrees * (Math.PI / 180);
-const getDistanceMeters = (start, end) => {
-  const earthRadiusMeters = 6371000;
-  const latitudeDelta = toRadians(end.latitude - start.latitude);
-  const longitudeDelta = toRadians(end.longitude - start.longitude);
-  const startLatitude = toRadians(start.latitude);
-  const endLatitude = toRadians(end.latitude);
-  const haversine =
-    Math.sin(latitudeDelta / 2) ** 2 +
-    Math.cos(startLatitude) * Math.cos(endLatitude) * Math.sin(longitudeDelta / 2) ** 2;
-
-  return 2 * earthRadiusMeters * Math.atan2(Math.sqrt(haversine), Math.sqrt(1 - haversine));
-};
 
 const createDeviceKey = () => {
   const browserCrypto = globalThis.crypto;
@@ -97,7 +81,6 @@ export default function StudentDashboard({ user, onLogout }) {
     sessions.find(session => session.id === selectedSessionKey) || sessions[0] || null
   ), [sessions, selectedSessionKey]);
   const studentId = user.knust_id || user.id;
-  const studentDeviceName = `KNUST_STU_${studentId}`;
   const qrValue = useMemo(() => (
     selectedSession
       ? JSON.stringify({
@@ -178,133 +161,39 @@ export default function StudentDashboard({ user, onLogout }) {
       return;
     }
 
-    const sessionRef = doc(db, 'attendance', selectedSession.id);
-    const recordRef = doc(db, 'attendance', selectedSession.id, 'records', studentId);
     const deviceKey = getBrowserDeviceKey();
-    const deviceRef = doc(db, 'attendance', selectedSession.id, 'devices', deviceKey);
     setIsVerifying(true);
     setStatus('Checking PIN and location...');
 
     try {
       const position = requireUsableGpsAccuracy(await getRefinedPosition());
-      const now = new Date();
-      const nowMs = Date.now();
-      const studentLocation = toLocationRecord(position, nowMs);
+      const submitAttendance = httpsCallable(functions, 'submitAttendance');
 
-      const result = await runTransaction(db, async (transaction) => {
-        const sessionSnap = await transaction.get(sessionRef);
-        let rosterStudent = null;
-
-        if (!sessionSnap.exists()) {
-          throw new Error('This attendance session no longer exists.');
-        }
-
-        const liveSession = sessionSnap.data();
-        const lecturerLocation = liveSession.lecturerLocation;
-        const thresholdMeters = liveSession.locationThresholdMeters || LOCATION_THRESHOLD_METERS;
-        const issuedAtMs = liveSession.pinGeneratedAt?.toMillis?.() || liveSession.pinIssuedAtMs;
-        const sessionPinWindowMs = liveSession.pinWindowMs || PIN_WINDOW_MS;
-        const expiresAtMs = issuedAtMs + sessionPinWindowMs;
-
-        if (!liveSession.active || liveSession.method !== 'PIN_GPS') {
-          throw new Error('This attendance session is no longer active.');
-        }
-
-        if (liveSession.currentPin !== submittedPin) {
-          throw new Error('Invalid PIN. Use the current PIN displayed by the lecturer.');
-        }
-
-        if (!issuedAtMs || nowMs > expiresAtMs) {
-          throw new Error('This PIN has expired. Enter the newly displayed PIN.');
-        }
-
-        if (typeof lecturerLocation?.latitude !== 'number' || typeof lecturerLocation?.longitude !== 'number') {
-          throw new Error('Lecturer GPS location is not ready yet. Try again in a moment.');
-        }
-
-        const distanceMeters = getDistanceMeters(studentLocation, lecturerLocation);
-
-        if (distanceMeters > thresholdMeters) {
-          throw new Error(`You are ${Math.round(distanceMeters)}m from the lecturer. Move within ${thresholdMeters}m and try again.`);
-        }
-
-        const existingRecord = await transaction.get(recordRef);
-        if (existingRecord.exists()) {
-          return {
-            alreadyVerified: true,
-            record: existingRecord.data(),
-            distanceMeters
-          };
-        }
-
-        const existingDevice = await transaction.get(deviceRef);
-        if (existingDevice.exists() && existingDevice.data().studentID !== studentId) {
-          throw new Error('This device has already been used to verify another student for this session.');
-        }
-
-        if (liveSession.courseId) {
-          const rosterRef = doc(db, 'courses', liveSession.courseId, 'students', studentId);
-          const rosterSnap = await transaction.get(rosterRef);
-
-          if (!rosterSnap.exists()) {
-            throw new Error('Your student ID is not on this course roster. Ask the lecturer to add you before verifying.');
-          }
-
-          rosterStudent = rosterSnap.data();
-        }
-
-        const resolvedStudentID = rosterStudent?.studentID || studentId;
-        const resolvedFullName = rosterStudent?.fullName || rosterStudent?.name || user.name;
-        const resolvedDeviceName = rosterStudent?.deviceName || studentDeviceName;
-
-        transaction.set(recordRef, {
-          studentID: resolvedStudentID,
-          indexNumber: rosterStudent?.indexNumber || '',
-          referenceNumber: rosterStudent?.referenceNumber || '',
-          fullName: resolvedFullName,
-          timeVerified: now.toLocaleTimeString(),
-          verifiedAt: serverTimestamp(),
-          verifiedAtIso: now.toISOString(),
-          verificationDate: now.toLocaleDateString(),
-          status: 'Verified',
-          timestamp: serverTimestamp(),
-          method: 'PIN_GPS',
-          courseCode: liveSession.courseCode,
-          week: liveSession.weekNumber,
-          sessionKey: selectedSession.id,
-          deviceName: resolvedDeviceName,
-          deviceKey,
-          studentLocation,
-          lecturerLocation,
-          distanceMeters: Math.round(distanceMeters),
-          pinWindowMs: sessionPinWindowMs
-        }, { merge: true });
-
-        transaction.set(deviceRef, {
-          studentID: resolvedStudentID,
-          fullName: resolvedFullName,
-          deviceName: resolvedDeviceName,
-          verifiedAt: serverTimestamp()
-        }, { merge: true });
-
-        return { alreadyVerified: false, distanceMeters };
+      const { data } = await submitAttendance({
+        sessionKey: selectedSession.id,
+        pin: submittedPin,
+        latitude: position.coords.latitude,
+        longitude: position.coords.longitude,
+        accuracy: Math.round(position.coords.accuracy),
+        deviceKey
       });
 
-      if (result.alreadyVerified) {
-        setExistingVerification(result.record);
-        setVerifiedSessionKey(selectedSession.id);
-        setStatus(`You are already verified for ${selectedSession.courseCode || selectedSession.originalCourseCode}.`);
+      const courseLabel = selectedSession.courseCode || selectedSession.originalCourseCode;
+      setVerifiedSessionKey(selectedSession.id);
+
+      if (data?.status === 'already-verified') {
+        setStatus(`You are already verified for ${courseLabel}.`);
         return;
       }
 
-      setVerifiedSessionKey(selectedSession.id);
       setPinInput('');
-      setStatus(`Presence verified for ${selectedSession.courseCode || selectedSession.originalCourseCode}. Distance: ${Math.round(result.distanceMeters)}m.`);
+      const distanceText = Number.isFinite(data?.distanceMeters) ? ` Distance: ${data.distanceMeters}m.` : '';
+      setStatus(`Presence verified for ${courseLabel}.${distanceText}`);
     } catch (verificationError) {
-      setError(verificationError?.code === 1
+      const message = verificationError?.code === 1
         ? 'Location permission is required to verify attendance.'
-        : verificationError.message || 'PIN + GPS verification failed. Please try again.'
-      );
+        : verificationError?.message || 'PIN + GPS verification failed. Please try again.';
+      setError(message);
       setStatus('');
     } finally {
       setIsVerifying(false);

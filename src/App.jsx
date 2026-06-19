@@ -1,11 +1,30 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, lazy, Suspense } from 'react';
 import Login from './components/Login';
-import LecturerDashboard from './components/LecturerDashboard';
-import StudentDashboard from './components/StudentDashboard';
 import './App.css';
 import { auth, db } from './firebase';
 import { onAuthStateChanged, signOut } from "firebase/auth";
 import { doc, getDoc } from "firebase/firestore";
+
+const LecturerDashboard = lazy(() => import('./components/LecturerDashboard'));
+const StudentDashboard = lazy(() => import('./components/StudentDashboard'));
+
+function FullScreenLoader() {
+  return (
+    <div style={{
+      height: '100vh',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      background: '#f8fafc'
+    }}>
+      <img
+        src="https://images.seeklogo.com/logo-png/35/2/kwame-nkrumah-university-of-science-technology-logo-png_seeklogo-350387.png"
+        style={{ width: '80px', opacity: 0.6 }}
+        alt="Loading..."
+      />
+    </div>
+  );
+}
 
 function App() {
   const [user, setUser] = useState(null);
@@ -70,31 +89,21 @@ function App() {
   };
 
   if (loading) {
-    return (
-      <div style={{
-        height: '100vh',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        background: '#f8fafc'
-      }}>
-        <img
-          src="https://images.seeklogo.com/logo-png/35/2/kwame-nkrumah-university-of-science-technology-logo-png_seeklogo-350387.png"
-          style={{ width: '80px', opacity: 0.6 }}
-          alt="Loading..."
-        />
-      </div>
-    );
+    return <FullScreenLoader />;
   }
 
   return (
     <div className="app-container">
       {!user ? (
         <ProjectLogin onLogin={handleLogin} />
-      ) : user.role === 'lecturer' ? (
-        <LecturerDashboard user={user} onLogout={handleLogout} />
       ) : (
-        <StudentDashboard user={user} onLogout={handleLogout} />
+        <Suspense fallback={<FullScreenLoader />}>
+          {user.role === 'lecturer' ? (
+            <LecturerDashboard user={user} onLogout={handleLogout} />
+          ) : (
+            <StudentDashboard user={user} onLogout={handleLogout} />
+          )}
+        </Suspense>
       )}
     </div>
   );

@@ -1,5 +1,4 @@
-import React, { useCallback, useMemo, useState, useEffect } from 'react';
-import Scanner from './Scanner';
+import React, { useCallback, useMemo, useState, useEffect, lazy, Suspense } from 'react';
 import { readSheet } from 'read-excel-file/browser';
 import { motion } from 'framer-motion';
 import {
@@ -48,6 +47,8 @@ import {
   serverTimestamp,
   writeBatch
 } from "firebase/firestore";
+
+const Scanner = lazy(() => import('./Scanner'));
 
 const MotionDiv = motion.div;
 const WEEKS = Array.from({ length: 15 }, (_, i) => i + 1);
@@ -391,6 +392,7 @@ export default function LecturerDashboard({ user, onLogout }) {
   const [activeCourse, setActiveCourse] = useState(null);
   const [currentWeek, setCurrentWeek] = useState(1);
   const [activeSession, setActiveSession] = useState(null);
+  const [sessionSecret, setSessionSecret] = useState(null);
   const [pinSecondsRemaining, setPinSecondsRemaining] = useState(0);
   const [bleStatus, setBleStatus] = useState('');
   const [isBleBusy, setIsBleBusy] = useState(false);
@@ -452,6 +454,7 @@ export default function LecturerDashboard({ user, onLogout }) {
   useEffect(() => {
     if (!activeCourse) {
       setActiveSession(null);
+      setSessionSecret(null);
       setBleStatus('');
       return;
     }
@@ -462,8 +465,26 @@ export default function LecturerDashboard({ user, onLogout }) {
       setActiveSession(sessionData);
       if (!sessionData?.active) return;
 
-      setBleStatus(`Active PIN session. Current PIN: ${sessionData.currentPin || 'refreshing...'}`);
+      setBleStatus('PIN + GPS session active. The current PIN is shown below.');
     });
+
+    return () => unsubscribe();
+  }, [activeCourse, currentWeek]);
+
+  // The PIN and lecturer GPS live in a lecturer-only secure subdocument so
+  // students can never read them. Subscribe so the lecturer can display the PIN.
+  useEffect(() => {
+    if (!activeCourse) {
+      setSessionSecret(null);
+      return;
+    }
+
+    const sessionKey = getSessionKey(activeCourse.code, currentWeek);
+    const unsubscribe = onSnapshot(
+      doc(db, "attendance", sessionKey, "secure", "state"),
+      (snapshot) => setSessionSecret(snapshot.exists() ? snapshot.data() : null),
+      () => setSessionSecret(null)
+    );
 
     return () => unsubscribe();
   }, [activeCourse, currentWeek]);
@@ -485,25 +506,10 @@ export default function LecturerDashboard({ user, onLogout }) {
     if (!activeCourse) return [];
 
     const rosterSnapshot = await getDocs(collection(db, "courses", activeCourse.id, "students"));
-    const rosterStudents = rosterSnapshot.docs.map(studentDoc => ({
+    return rosterSnapshot.docs.map(studentDoc => ({
       uid: studentDoc.id,
       ...studentDoc.data()
     })).filter(student => student.studentID);
-
-    if (rosterStudents.length) return rosterStudents;
-
-    const studentsQuery = query(collection(db, "users"), where("role", "==", "student"));
-    const studentsSnapshot = await getDocs(studentsQuery);
-    return studentsSnapshot.docs.map(studentDoc => ({
-      uid: studentDoc.id,
-      studentID: studentDoc.data().knust_id,
-      indexNumber: studentDoc.data().knust_id,
-      fullName: studentDoc.data().name,
-      name: studentDoc.data().name,
-      referenceNumber: '',
-      deviceName: getStudentDeviceName(studentDoc.data().knust_id),
-      ...studentDoc.data()
-    })).filter(student => student.knust_id);
   }, [activeCourse]);
 
   const parseRosterFile = async (file) => {
@@ -1047,16 +1053,24 @@ export default function LecturerDashboard({ user, onLogout }) {
     const position = requireUsableGpsAccuracy(await getRefinedPosition());
     const nowMs = Date.now();
     const currentPin = generatePin();
+    const pinExpiresAtMs = nowMs + PIN_WINDOW_MS;
 
     await setDoc(doc(db, "attendance", sessionKey), {
-      currentPin,
       pinIssuedAtMs: nowMs,
-      pinExpiresAtMs: nowMs + PIN_WINDOW_MS,
+      pinExpiresAtMs,
       pinWindowMs: PIN_WINDOW_MS,
       locationThresholdMeters: PIN_DISTANCE_METERS,
-      lecturerLocation: toLocationRecord(position, nowMs),
       pinGeneratedAt: serverTimestamp(),
       locationUpdatedAt: serverTimestamp()
+    }, { merge: true });
+
+    await setDoc(doc(db, "attendance", sessionKey, "secure", "state"), {
+      currentPin,
+      lecturerLocation: toLocationRecord(position, nowMs),
+      pinIssuedAtMs: nowMs,
+      pinExpiresAtMs,
+      pinWindowMs: PIN_WINDOW_MS,
+      updatedAt: serverTimestamp()
     }, { merge: true });
 
     if (!silent) {
@@ -1080,6 +1094,7 @@ export default function LecturerDashboard({ user, onLogout }) {
       const now = new Date();
       const nowMs = Date.now();
       const currentPin = generatePin();
+      const pinExpiresAtMs = nowMs + PIN_WINDOW_MS;
       const position = requireUsableGpsAccuracy(await getRefinedPosition());
 
       await setDoc(doc(db, "attendance", sessionKey), {
@@ -1095,18 +1110,25 @@ export default function LecturerDashboard({ user, onLogout }) {
         method: "PIN_GPS",
         verificationMode: "PIN_GPS",
         sessionKey,
-        currentPin,
         pinIssuedAtMs: nowMs,
-        pinExpiresAtMs: nowMs + PIN_WINDOW_MS,
+        pinExpiresAtMs,
         pinWindowMs: PIN_WINDOW_MS,
         locationThresholdMeters: PIN_DISTANCE_METERS,
-        lecturerLocation: toLocationRecord(position, nowMs),
         startedAt: serverTimestamp(),
         startedAtIso: now.toISOString(),
         sessionDate: now.toLocaleDateString(),
         endedAt: null,
         pinGeneratedAt: serverTimestamp(),
         locationUpdatedAt: serverTimestamp()
+      }, { merge: true });
+
+      await setDoc(doc(db, "attendance", sessionKey, "secure", "state"), {
+        currentPin,
+        lecturerLocation: toLocationRecord(position, nowMs),
+        pinIssuedAtMs: nowMs,
+        pinExpiresAtMs,
+        pinWindowMs: PIN_WINDOW_MS,
+        updatedAt: serverTimestamp()
       }, { merge: true });
 
       setBleStatus(`Session active. Current PIN: ${currentPin}. It will rotate every 3 minutes.`);
@@ -1348,7 +1370,7 @@ export default function LecturerDashboard({ user, onLogout }) {
   }, [view, activeCourse, loadCourseHistory]);
 
   const currentSessionKey = activeCourse ? getSessionKey(activeCourse.code, currentWeek) : '';
-  const currentSessionPin = activeSession?.currentPin || '----';
+  const currentSessionPin = sessionSecret?.currentPin || '----';
   const currentRecords = useMemo(() => attendance[currentSessionKey] || [], [attendance, currentSessionKey]);
   const sortedCurrentRecords = useMemo(() => sortByStudentId(currentRecords, 'asc'), [currentRecords]);
   const filteredHistoryRows = useMemo(() => {
@@ -1623,7 +1645,7 @@ export default function LecturerDashboard({ user, onLogout }) {
                     <p style={{color: 'var(--text-muted)', fontSize: '0.9rem'}}>Current PIN: <strong style={{fontSize: '1.35rem', letterSpacing: '3px'}}>{currentSessionPin}</strong></p>
                     <p style={{color: 'var(--text-muted)', fontSize: '0.8rem'}}>
                       Next rotation: {formatCountdown(pinSecondsRemaining)}. GPS threshold: {PIN_DISTANCE_METERS}m.
-                      {activeSession?.lecturerLocation?.accuracy ? ` Accuracy: +/-${activeSession.lecturerLocation.accuracy}m.` : ''}
+                      {sessionSecret?.lecturerLocation?.accuracy ? ` Accuracy: +/-${sessionSecret.lecturerLocation.accuracy}m.` : ''}
                     </p>
                   </div>
                 </div>
@@ -1668,7 +1690,9 @@ export default function LecturerDashboard({ user, onLogout }) {
 
               {isQrFallbackOpen && (
                 <div style={{maxWidth: '520px', margin: '20px auto 0', borderRadius: '18px', overflow: 'hidden', border: '3px solid var(--knust-blue)', background: '#fff', padding: '12px'}}>
-                  <Scanner onResult={handleQrScanSuccess} onClose={() => setIsQrFallbackOpen(false)} />
+                  <Suspense fallback={<div style={{padding: '24px', textAlign: 'center', color: 'var(--text-muted)'}}>Loading scanner...</div>}>
+                    <Scanner onResult={handleQrScanSuccess} onClose={() => setIsQrFallbackOpen(false)} />
+                  </Suspense>
                 </div>
               )}
 

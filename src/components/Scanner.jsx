@@ -18,7 +18,7 @@ export default function Scanner({ onResult, onClose }) {
   const scannerRef = useRef(null);
   const isHandlingResultRef = useRef(false);
   const generatedId = useId();
-  const readerId = `qr-reader-${generatedId.replace(/:/g, '')}`;
+  const readerId = `qr-reader-${generatedId.replace(/[^a-zA-Z0-9]/g, '')}`;
 
   useEffect(() => {
     scannerRef.current = new Html5Qrcode(readerId);
@@ -65,8 +65,15 @@ export default function Scanner({ onResult, onClose }) {
     setIsCameraMode(true);
 
     window.setTimeout(async () => {
+      const scanner = scannerRef.current;
+      if (!scanner) {
+        setError('Scanner is not ready yet. Please try again.');
+        setIsCameraMode(false);
+        return;
+      }
+
       try {
-        await scannerRef.current.start(
+        await scanner.start(
           { facingMode: 'environment' },
           { fps: 10, qrbox: { width: 250, height: 250 } },
           handleScanSuccess,
@@ -74,7 +81,10 @@ export default function Scanner({ onResult, onClose }) {
         );
       } catch (scanError) {
         console.error('QR camera failed:', scanError);
-        setError('Camera could not start. You can upload a QR image instead.');
+        const reason = scanError?.name === 'NotAllowedError'
+          ? 'Camera permission was denied. Allow camera access or upload a QR image instead.'
+          : 'Camera could not start. You can upload a QR image instead.';
+        setError(reason);
         setIsCameraMode(false);
       }
     }, 50);
