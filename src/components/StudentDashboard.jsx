@@ -1,16 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { QRCodeCanvas } from 'qrcode.react';
-import { AnimatePresence, motion } from 'framer-motion';
-import {
-  AlertCircle,
-  CheckCircle2,
-  Clock3,
-  KeyRound,
-  LogOut,
-  MapPin,
-  QrCode,
-  ShieldCheck
-} from 'lucide-react';
+import { motion } from 'framer-motion';
+import { AlertCircle, CheckCircle, KeyRound, LogOut, MapPin, QrCode } from 'lucide-react';
 import { db, functions } from '../firebase';
 import {
   collection,
@@ -21,13 +12,8 @@ import {
 } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { getRefinedPosition, requireUsableGpsAccuracy } from '../utils/geolocation';
-import Button from './ui/Button';
-import Card from './ui/Card';
-import { cn } from '../lib/cn';
-import { fadeUp, popIn, staggerChildren } from '../lib/motion';
 
 const MotionDiv = motion.div;
-const MotionSection = motion.section;
 const LOCATION_THRESHOLD_METERS = 100;
 const QR_REFRESH_MS = 60 * 1000;
 const formatCountdown = (seconds = 0) => `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
@@ -214,205 +200,202 @@ export default function StudentDashboard({ user, onLogout }) {
     }
   };
 
-  const thresholdMeters = selectedSession?.locationThresholdMeters || LOCATION_THRESHOLD_METERS;
-  const pinDigits = pinInput.padEnd(4, ' ').slice(0, 4).split('');
-
   return (
-    <div className="aurora-bg min-h-dvh px-4 py-8 sm:px-6 sm:py-10">
-      <MotionSection
-        variants={staggerChildren}
-        initial="hidden"
-        animate="show"
-        className="mx-auto w-full max-w-4xl"
+    <div className="knust-login-page">
+      <MotionDiv
+        className="login-glass-card"
+        initial={{ opacity: 0, y: 18, scale: 0.98 }}
+        animate={{ opacity: 1, y: 0, scale: 1 }}
+        transition={{ duration: 0.45, ease: 'easeOut' }}
       >
-        {/* Header */}
-        <MotionDiv variants={fadeUp} className="mb-6 flex flex-wrap items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <img
-              src="https://images.seeklogo.com/logo-png/35/2/kwame-nkrumah-university-of-science-technology-logo-png_seeklogo-350387.png"
-              alt="KNUST Logo"
-              className="size-12 rounded-2xl bg-white/70 p-1.5 shadow-[var(--shadow-card)]"
-            />
+        <img
+          src="https://images.seeklogo.com/logo-png/35/2/kwame-nkrumah-university-of-science-technology-logo-png_seeklogo-350387.png"
+          alt="KNUST Logo"
+          style={{ width: '60px', height: 'auto', marginBottom: '15px' }}
+        />
+
+        <h2 style={{color: '#003366', fontSize: '1.4rem', marginBottom: '5px'}}>
+          Welcome, {user.name}
+        </h2>
+        <p style={{color: '#64748b', marginBottom: '18px'}}>ID: {studentId}</p>
+
+        <div style={{
+          margin: '20px 0',
+          padding: '20px',
+          background: 'rgba(255,255,255,0.95)',
+          borderRadius: '16px',
+          border: '1px solid #e2e8f0',
+          boxShadow: '0 4px 12px rgba(0,0,0,0.08)',
+          textAlign: 'left'
+        }}>
+          <div style={{display: 'flex', gap: '12px', alignItems: 'center', marginBottom: '14px'}}>
+            <KeyRound size={30} color="#003366" />
             <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-brand-700/70">
-                Student presence
-              </p>
-              <h1 className="text-lg font-bold leading-tight text-slate-800 sm:text-xl">
-                Welcome, <span className="text-gradient">{user.name}</span>
-              </h1>
-              <p className="text-sm text-slate-500">ID: {studentId}</p>
+              <h3 style={{color: '#003366', fontSize: '1rem', margin: 0}}>PIN + GPS Presence</h3>
+              <p style={{color: '#64748b', fontSize: '0.8rem', margin: 0}}>Enter the lecturer's current 4-digit PIN.</p>
             </div>
           </div>
-          <Button variant="ghost" size="sm" onClick={onLogout} className="shrink-0">
-            <LogOut size={16} /> Logout
-          </Button>
-        </MotionDiv>
 
-        {/* Alerts */}
-        <AnimatePresence initial={false}>
-          {error && (
-            <MotionDiv
-              key="error"
-              initial={{ opacity: 0, height: 0, marginBottom: 0 }}
-              animate={{ opacity: 1, height: 'auto', marginBottom: 16 }}
-              exit={{ opacity: 0, height: 0, marginBottom: 0 }}
-              transition={{ duration: 0.3 }}
-              className="overflow-hidden"
+          {sessions.length > 1 && (
+            <select
+              value={selectedSession?.id || ''}
+              onChange={(e) => setSelectedSessionKey(e.target.value)}
+              className="week-dropdown"
+              style={{width: '100%', marginBottom: '12px'}}
             >
-              <div className="flex items-center gap-2.5 rounded-2xl border border-rose-200 bg-rose-50/90 px-4 py-3 text-sm font-medium text-rose-700">
-                <AlertCircle size={18} className="shrink-0" /> {error}
-              </div>
-            </MotionDiv>
+              {sessions.map(session => (
+                <option key={session.id} value={session.id}>
+                  {session.originalCourseCode || session.courseCode} - Week {session.weekNumber}
+                </option>
+              ))}
+            </select>
           )}
-          {status && (
-            <MotionDiv
-              key="status"
-              initial={{ opacity: 0, height: 0, marginBottom: 0 }}
-              animate={{ opacity: 1, height: 'auto', marginBottom: 16 }}
-              exit={{ opacity: 0, height: 0, marginBottom: 0 }}
-              transition={{ duration: 0.3 }}
-              className="overflow-hidden"
-            >
-              <div
-                className={cn(
-                  'flex items-center gap-2.5 rounded-2xl border px-4 py-3 text-sm font-medium',
-                  verifiedSessionKey
-                    ? 'border-grass-200 bg-grass-50/90 text-grass-700'
-                    : 'border-brand-200 bg-brand-50/90 text-brand-700'
-                )}
-              >
-                {verifiedSessionKey ? <CheckCircle2 size={18} className="shrink-0" /> : <MapPin size={18} className="shrink-0" />}
-                {status}
-              </div>
-            </MotionDiv>
-          )}
-        </AnimatePresence>
 
-        <div className="grid gap-5 lg:grid-cols-5">
-          {/* Main PIN panel */}
-          <MotionDiv variants={popIn} className="lg:col-span-3">
-            <Card className="p-6 sm:p-7">
-              <div className="mb-5 flex items-start gap-3">
-                <span className="grid size-11 shrink-0 place-items-center rounded-2xl bg-gradient-to-br from-brand-600 via-iris-600 to-grass-600 text-white shadow-[var(--shadow-glow)]">
-                  <KeyRound size={20} />
-                </span>
-                <div>
-                  <h2 className="text-base font-bold text-slate-800">PIN + GPS Presence</h2>
-                  <p className="text-sm text-slate-500">Enter the lecturer's current 4-digit PIN.</p>
-                </div>
-              </div>
+          <div style={{
+            padding: '12px',
+            borderRadius: '12px',
+            background: sessions.length ? '#f0fdf4' : '#f8fafc',
+            color: sessions.length ? '#166534' : '#64748b',
+            border: sessions.length ? '1px solid #bbf7d0' : '1px solid #e2e8f0',
+            fontSize: '0.85rem',
+            fontWeight: 600
+          }}>
+            {selectedSession
+              ? `${selectedSession.originalCourseCode || selectedSession.courseCode} Week ${selectedSession.weekNumber}: next PIN in ${formatCountdown(pinSecondsRemaining)}`
+              : 'Waiting for a lecturer to start a PIN session.'}
+          </div>
 
-              {sessions.length > 1 && (
-                <select
-                  value={selectedSession?.id || ''}
-                  onChange={(e) => setSelectedSessionKey(e.target.value)}
-                  className="mb-4 h-12 w-full rounded-2xl border border-slate-200 bg-white/80 px-4 text-sm font-medium text-slate-700 transition-[border,box-shadow] focus:border-iris-400 focus:outline-none focus:ring-4 focus:ring-iris-500/15"
-                >
-                  {sessions.map(session => (
-                    <option key={session.id} value={session.id}>
-                      {session.originalCourseCode || session.courseCode} - Week {session.weekNumber}
-                    </option>
-                  ))}
-                </select>
-              )}
-
-              <div
-                className={cn(
-                  'flex items-center gap-2.5 rounded-2xl border px-4 py-3 text-sm font-semibold',
-                  selectedSession
-                    ? 'border-grass-200 bg-grass-50/80 text-grass-700'
-                    : 'border-slate-200 bg-slate-50/80 text-slate-500'
-                )}
-              >
-                <Clock3 size={16} className="shrink-0" />
-                {selectedSession
-                  ? `${selectedSession.originalCourseCode || selectedSession.courseCode} Week ${selectedSession.weekNumber}: next PIN in ${formatCountdown(pinSecondsRemaining)}`
-                  : 'Waiting for a lecturer to start a PIN session.'}
-              </div>
-
-              <p className="mt-3 flex items-center gap-1.5 text-xs text-slate-500">
-                <ShieldCheck size={14} className="text-iris-500" />
-                Location threshold: <strong className="text-slate-700">{thresholdMeters}m</strong>
-              </p>
-
-              {/* PIN entry */}
-              {selectedSession && !isAlreadyVerified && (
-                <div className="mt-6">
-                  <label className="mb-2 block text-xs font-semibold uppercase tracking-wide text-slate-500">
-                    Enter PIN
-                  </label>
-                  <div className="relative">
-                    <input
-                      aria-label="4-digit PIN"
-                      inputMode="numeric"
-                      maxLength={4}
-                      value={pinInput}
-                      onChange={(event) => setPinInput(event.target.value.replace(/\D/g, '').slice(0, 4))}
-                      className="absolute inset-0 z-10 h-full w-full cursor-text rounded-2xl opacity-0"
-                    />
-                    <div className="grid grid-cols-4 gap-3">
-                      {pinDigits.map((digit, index) => (
-                        <div
-                          key={index}
-                          className={cn(
-                            'grid h-16 place-items-center rounded-2xl border-2 text-3xl font-black text-brand-800 transition-colors duration-200',
-                            digit.trim()
-                              ? 'border-iris-300 bg-iris-50/60'
-                              : 'border-slate-200 bg-white/70',
-                            index === pinInput.length && !isVerifying && 'border-iris-400 ring-4 ring-iris-500/15'
-                          )}
-                        >
-                          {digit.trim() || ''}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              <Button
-                variant="success"
-                size="lg"
-                fullWidth
-                className="mt-6"
-                onClick={verifyPresence}
-                disabled={!selectedSession || isVerifying || isAlreadyVerified}
-                isLoading={isVerifying}
-              >
-                {!isVerifying && (isAlreadyVerified ? <CheckCircle2 size={18} /> : <MapPin size={18} />)}
-                {isAlreadyVerified ? 'Already Verified' : isVerifying ? 'Verifying…' : 'Submit PIN + Verify Location'}
-              </Button>
-            </Card>
-          </MotionDiv>
-
-          {/* QR backup panel */}
-          <MotionDiv variants={popIn} className="lg:col-span-2">
-            {selectedSession ? (
-              <Card glass className="flex h-full flex-col items-center p-6 text-center sm:p-7">
-                <div className="mb-2 flex items-center gap-2 font-bold text-brand-800">
-                  <QrCode size={18} /> QR Backup
-                </div>
-                <p className="mb-5 text-xs text-slate-500">
-                  Show this rotating fallback code to the lecturer if PIN + GPS verification is unavailable.
-                </p>
-                <div className="rounded-3xl bg-white p-4 shadow-[var(--shadow-card)]">
-                  <QRCodeCanvas value={qrValue} size={180} level="H" includeMargin />
-                </div>
-                <p className="mt-4 text-[0.7rem] font-medium uppercase tracking-wide text-slate-400">
-                  Refreshes every minute
-                </p>
-              </Card>
-            ) : (
-              <Card glass className="grid h-full place-items-center p-8 text-center">
-                <div className="text-slate-400">
-                  <QrCode size={40} className="mx-auto mb-3 opacity-40" />
-                  <p className="text-sm font-medium">QR backup appears once a session is active.</p>
-                </div>
-              </Card>
-            )}
-          </MotionDiv>
+          <p style={{color: '#64748b', fontSize: '0.8rem', margin: '12px 0 0'}}>
+            Location threshold: <strong>{selectedSession?.locationThresholdMeters || LOCATION_THRESHOLD_METERS}m</strong>
+          </p>
         </div>
-      </MotionSection>
+
+        {error && (
+          <div style={{
+            background: '#fee2e2',
+            color: '#dc2626',
+            padding: '10px',
+            borderRadius: '8px',
+            marginBottom: '15px',
+            fontSize: '0.85rem',
+            border: '1px solid #fecaca',
+            textAlign: 'center',
+            fontWeight: '500',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: '8px'
+          }}>
+            <AlertCircle size={16} /> {error}
+          </div>
+        )}
+
+        {status && (
+          <div style={{
+            background: verifiedSessionKey ? '#dcfce7' : '#eff6ff',
+            color: verifiedSessionKey ? '#166534' : '#1d4ed8',
+            padding: '10px',
+            borderRadius: '8px',
+            marginBottom: '15px',
+            fontSize: '0.85rem',
+            border: verifiedSessionKey ? '1px solid #bbf7d0' : '1px solid #bfdbfe',
+            textAlign: 'center',
+            fontWeight: '500',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: '8px'
+          }}>
+            {verifiedSessionKey ? <CheckCircle size={16} /> : <MapPin size={16} />} {status}
+          </div>
+        )}
+
+        {selectedSession && !isAlreadyVerified && (
+          <div style={{
+            margin: '18px 0',
+            padding: '16px',
+            background: '#ffffff',
+            borderRadius: '16px',
+            border: '1px solid #e2e8f0',
+            boxShadow: '0 4px 12px rgba(0,0,0,0.08)'
+          }}>
+            <input
+              placeholder="4-digit PIN"
+              inputMode="numeric"
+              maxLength={4}
+              value={pinInput}
+              onChange={(event) => setPinInput(event.target.value.replace(/\D/g, '').slice(0, 4))}
+              style={{
+                width: '100%',
+                textAlign: 'center',
+                fontSize: '2rem',
+                letterSpacing: '8px',
+                fontWeight: 900,
+                color: '#003366',
+                border: '2px solid #dbeafe',
+                borderRadius: '14px',
+                padding: '12px',
+                outline: 'none'
+              }}
+            />
+          </div>
+        )}
+
+        {selectedSession && (
+          <div style={{
+            margin: '18px 0',
+            padding: '16px',
+            background: '#ffffff',
+            borderRadius: '16px',
+            border: '1px solid #e2e8f0',
+            boxShadow: '0 4px 12px rgba(0,0,0,0.08)'
+          }}>
+            <div style={{display: 'flex', gap: '10px', alignItems: 'center', justifyContent: 'center', marginBottom: '12px', color: '#003366', fontWeight: 800}}>
+              <QrCode size={18} /> QR Backup
+            </div>
+            <p style={{color: '#64748b', fontSize: '0.78rem', margin: '0 0 10px', textAlign: 'center'}}>
+              Show this rotating fallback code to the lecturer if PIN + GPS verification is unavailable.
+            </p>
+            <QRCodeCanvas
+              value={qrValue}
+              size={180}
+              level="H"
+              includeMargin
+            />
+          </div>
+        )}
+
+        <button
+          onClick={verifyPresence}
+          className="login-btn-final"
+          disabled={!selectedSession || isVerifying || isAlreadyVerified}
+          style={{
+            background: '#006837',
+            width: '100%',
+            padding: '14px',
+            borderRadius: '12px',
+            color: 'white',
+            border: 'none',
+            cursor: !selectedSession || isVerifying || isAlreadyVerified ? 'not-allowed' : 'pointer',
+            opacity: !selectedSession || isVerifying || isAlreadyVerified ? 0.7 : 1,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: '8px'
+          }}
+        >
+          {isAlreadyVerified ? <CheckCircle size={18} /> : <MapPin size={18} />}
+          {isAlreadyVerified ? 'Already Verified' : isVerifying ? 'Verifying...' : 'Submit PIN + Verify Location'}
+        </button>
+
+        <button
+          onClick={onLogout}
+          className="login-btn-final"
+          style={{background: '#64748b', width: '100%', padding: '12px', borderRadius: '10px', color: 'white', border: 'none', cursor: 'pointer', marginTop: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px'}}
+        >
+          <LogOut size={16} /> Logout
+        </button>
+      </MotionDiv>
     </div>
   );
 }
