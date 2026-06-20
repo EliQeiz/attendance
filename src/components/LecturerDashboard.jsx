@@ -1,6 +1,6 @@
 import React, { useCallback, useMemo, useState, useEffect, lazy, Suspense } from 'react';
 import { readSheet } from 'read-excel-file/browser';
-import { motion } from 'framer-motion';
+import { AnimatePresence, motion } from 'framer-motion';
 import {
   Search,
   Download,
@@ -48,9 +48,13 @@ import {
   writeBatch
 } from "firebase/firestore";
 
+import Button from './ui/Button';
+import { cn } from '../lib/cn';
+
 const Scanner = lazy(() => import('./Scanner'));
 
 const MotionDiv = motion.div;
+const MotionAside = motion.aside;
 const WEEKS = Array.from({ length: 15 }, (_, i) => i + 1);
 const PIN_WINDOW_MS = 3 * 60 * 1000;
 const PIN_DISTANCE_METERS = 100;
@@ -1434,513 +1438,674 @@ export default function LecturerDashboard({ user, onLogout }) {
     : 0;
 
   return (
-    <MotionDiv
-      className={`dashboard-layout ${darkMode ? 'dark-theme' : ''}`}
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      transition={{ duration: 0.35 }}
-    >
-      <aside className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
-        <div className="sidebar-header" style={{ marginBottom: '40px' }}>
-          <img src="https://images.seeklogo.com/logo-png/35/2/kwame-nkrumah-university-of-science-technology-logo-png_seeklogo-350387.png" className="sidebar-logo" alt="KNUST" style={{ width: '80px', filter: 'drop-shadow(0 4px 10px rgba(0,0,0,0.2))' }} />
-          <X className="mobile-close-btn" onClick={() => setSidebarOpen(false)} />
-        </div>
+    <div className={cn('relative min-h-dvh', darkMode && 'dark')}>
+      <div className="min-h-dvh bg-gradient-to-br from-slate-50 via-brand-50/40 to-grass-50/30 text-slate-800 transition-colors dark:from-slate-950 dark:via-slate-900 dark:to-slate-950 dark:text-slate-100">
 
-        <nav className="sidebar-nav">
-          <div className="nav-group">
-            <p className="nav-label">Main Menu</p>
-            <button onClick={() => { setView('hub'); setActiveCourse(null); setSidebarOpen(false); }} className={`nav-item ${view === 'hub' ? 'active-nav' : ''}`}>
-              <LayoutGrid size={20} /> Academic Hub
+        {/* Mobile overlay */}
+        <AnimatePresence>
+          {sidebarOpen && (
+            <MotionDiv
+              key="overlay"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setSidebarOpen(false)}
+              className="fixed inset-0 z-30 bg-slate-900/50 backdrop-blur-sm lg:hidden"
+            />
+          )}
+        </AnimatePresence>
+
+        {/* Sidebar */}
+        <MotionAside
+          className={cn(
+            'fixed inset-y-0 left-0 z-40 flex w-72 flex-col gap-6 overflow-y-auto px-5 py-7 text-white transition-transform duration-300 ease-out lg:translate-x-0',
+            'bg-gradient-to-b from-brand-900 via-iris-900 to-brand-950',
+            sidebarOpen ? 'translate-x-0' : '-translate-x-full'
+          )}
+        >
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <img
+                src="https://images.seeklogo.com/logo-png/35/2/kwame-nkrumah-university-of-science-technology-logo-png_seeklogo-350387.png"
+                alt="KNUST"
+                className="size-11 rounded-2xl bg-white/10 p-1.5 backdrop-blur"
+              />
+              <div>
+                <p className="text-sm font-bold leading-tight">KNUST</p>
+                <p className="text-[0.7rem] uppercase tracking-[0.18em] text-white/60">Lecturer</p>
+              </div>
+            </div>
+            <button
+              onClick={() => setSidebarOpen(false)}
+              className="grid size-9 place-items-center rounded-xl text-white/70 hover:bg-white/10 hover:text-white lg:hidden"
+            >
+              <X size={20} />
+            </button>
+          </div>
+
+          <nav className="flex flex-col gap-1.5">
+            <p className="px-2 pb-1 text-[0.65rem] font-semibold uppercase tracking-[0.18em] text-white/40">Main Menu</p>
+            <button
+              onClick={() => { setView('hub'); setActiveCourse(null); setSidebarOpen(false); }}
+              className={cn('nav-link', view === 'hub' && 'nav-link-active')}
+            >
+              <LayoutGrid size={18} /> Academic Hub
             </button>
             <button
-              onClick={() => { if(activeCourse) setView('history'); setSidebarOpen(false); }}
-              className={`nav-item ${view === 'history' ? 'active-nav' : ''}`}
+              onClick={() => { if (activeCourse) setView('history'); setSidebarOpen(false); }}
+              className={cn('nav-link disabled:cursor-not-allowed disabled:opacity-40', view === 'history' && 'nav-link-active')}
               disabled={!activeCourse}
-              style={{ opacity: activeCourse ? 1 : 0.4 }}
             >
-              <History size={20} /> Attendance History
+              <History size={18} /> Attendance History
             </button>
-          </div>
+          </nav>
 
-          <div className="nav-group" style={{marginTop: '30px'}}>
-            <p className="nav-label">UI Preferences</p>
-            <button onClick={() => setDarkMode(!darkMode)} className="nav-item">
-              {darkMode ? <Sun size={20} /> : <Moon size={20} />}
+          <nav className="flex flex-col gap-1.5">
+            <p className="px-2 pb-1 text-[0.65rem] font-semibold uppercase tracking-[0.18em] text-white/40">UI Preferences</p>
+            <button onClick={() => setDarkMode(!darkMode)} className="nav-link">
+              {darkMode ? <Sun size={18} /> : <Moon size={18} />}
               {darkMode ? 'Light Theme' : 'Dark Theme'}
             </button>
-          </div>
+          </nav>
 
-          {activeCourse && (
-            <div className="nav-group" style={{marginTop: '30px'}}>
-              <p className="nav-label">Switch Context</p>
+          {activeCourse && courses.filter(c => c.id !== activeCourse.id).length > 0 && (
+            <nav className="flex flex-col gap-1.5">
+              <p className="px-2 pb-1 text-[0.65rem] font-semibold uppercase tracking-[0.18em] text-white/40">Switch Context</p>
               {courses.filter(c => c.id !== activeCourse.id).map(c => (
-                <button key={c.id} onClick={() => { setActiveCourse(c); setView('session'); setSidebarOpen(false); }} className="nav-item-sub">
-                  <div style={{display:'flex', alignItems:'center', gap: '8px'}}>
-                    <div style={{width: '6px', height:'6px', borderRadius:'50%', background:'var(--knust-yellow)'}}></div>
-                    {c.code}
-                  </div>
+                <button
+                  key={c.id}
+                  onClick={() => { setActiveCourse(c); setView('session'); setSidebarOpen(false); }}
+                  className="nav-link text-white/60"
+                >
+                  <span className="size-1.5 rounded-full bg-grass-400" />
+                  {c.code}
                 </button>
               ))}
-            </div>
+            </nav>
           )}
-        </nav>
 
-        <div className="sidebar-user-card" style={{marginTop: 'auto', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)'}}>
-          <p style={{ fontSize: '0.65rem', opacity: 0.6, letterSpacing: '1px' }}>LOGGED IN AS</p>
-          <p style={{fontSize: '0.95rem', margin: '4px 0'}}><strong>{user.name}</strong></p>
-          <p style={{ fontSize: '0.75rem', opacity: 0.8, marginBottom: '12px' }}>ID: {user.id}</p>
-          <button onClick={onLogout} className="mini-logout" style={{width: '100%', justifyContent:'center', display:'flex', gap: '8px'}}><LogOut size={14} /> Sign Out</button>
-        </div>
-      </aside>
+          <div className="mt-auto rounded-2xl border border-white/10 bg-white/5 p-4">
+            <p className="text-[0.6rem] uppercase tracking-[0.18em] text-white/50">Logged in as</p>
+            <p className="mt-1 text-sm font-bold">{user.name}</p>
+            <p className="text-xs text-white/60">ID: {user.id}</p>
+            <button
+              onClick={onLogout}
+              className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl bg-white/10 px-3 py-2 text-sm font-semibold text-white transition-colors hover:bg-white/20"
+            >
+              <LogOut size={14} /> Sign Out
+            </button>
+          </div>
+        </MotionAside>
 
-      <main className="main-content">
-        <header className="top-bar" style={{display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom: '30px'}}>
-          <div style={{display:'flex', alignItems:'center', gap: '15px'}}>
-            <button className="hamburger" onClick={() => setSidebarOpen(true)}><Menu size={28} /></button>
+        <div className="lg:pl-72">
+        <header className="sticky top-0 z-20 flex items-center justify-between gap-4 border-b border-slate-200/70 bg-white/70 px-4 py-3.5 backdrop-blur-xl sm:px-6 lg:px-8 dark:border-white/10 dark:bg-slate-900/60">
+          <div className="flex items-center gap-3">
+            <button
+              className="grid size-10 place-items-center rounded-xl border border-slate-200 bg-white/80 text-slate-600 hover:bg-slate-50 lg:hidden dark:border-white/10 dark:bg-white/5 dark:text-slate-200"
+              onClick={() => setSidebarOpen(true)}
+            >
+              <Menu size={20} />
+            </button>
             <div>
-              <h4 style={{fontSize: '0.75rem', color: 'var(--knust-green)', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '2px'}}>Lecturer Portal</h4>
-              <h1 style={{fontSize: '1.5rem', color: 'var(--knust-blue)', fontWeight: '900'}}>{activeCourse ? activeCourse.code : 'Academic Overview'}</h1>
+              <p className="text-[0.7rem] font-bold uppercase tracking-[0.18em] text-grass-600">Lecturer Portal</p>
+              <h1 className="text-lg font-extrabold leading-tight text-brand-900 sm:text-xl dark:text-white">
+                {activeCourse ? activeCourse.code : 'Academic Overview'}
+              </h1>
             </div>
           </div>
           {activeCourse && view !== 'hub' && (
-            <div className="course-badge" style={{background: 'var(--knust-blue)', color: 'white', padding: '6px 16px', borderRadius: '20px', fontSize: '0.85rem', fontWeight: '600'}}>
+            <span className="hidden rounded-full bg-gradient-to-r from-brand-600 to-iris-600 px-4 py-1.5 text-sm font-semibold text-white shadow-[var(--shadow-card)] sm:inline-block">
               {activeCourse.name}
-            </div>
+            </span>
           )}
         </header>
 
+        <main className="px-4 py-6 sm:px-6 sm:py-8 lg:px-8">
+
         {view === 'hub' && (
-          <div className="hub fade-in">
-            <div className="welcome-banner" style={{marginBottom: '40px'}}>
-              <h2 style={{fontSize: '2.5rem', fontWeight: '900', background: 'linear-gradient(45deg, var(--knust-blue), var(--knust-green))', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent'}}>
-                Welcome back, {user.name.split(' ')[0]}!
+          <MotionDiv
+            initial={{ opacity: 0, y: 16 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.4, ease: [0.22, 1, 0.36, 1] }}
+            className="mx-auto max-w-6xl"
+          >
+            <div className="mb-8">
+              <h2 className="text-3xl font-extrabold sm:text-4xl">
+                Welcome back, <span className="text-gradient">{user.name.split(' ')[0]}</span>!
               </h2>
-              <p style={{fontSize: '1.1rem', color: 'var(--text-muted)', marginTop: '5px'}}>Select a course to start recording attendance or view semester analytics.</p>
+              <p className="mt-2 text-base text-slate-500 dark:text-slate-400">
+                Select a course to start recording attendance or view semester analytics.
+              </p>
             </div>
 
-            <div className="table-card" style={{padding: '30px', border: '1px solid var(--knust-blue)', borderLeftWidth: '6px'}}>
-              <h3 style={{marginBottom: '20px', fontSize: '1rem', color: 'var(--knust-blue)'}}>Quick Actions: Register New Course</h3>
-              <form onSubmit={addCourse} style={{display: 'flex', gap: '15px', flexWrap: 'wrap'}}>
-                <input name="cn" placeholder="Course Title (e.g. Thermodynamics)" required className="pro-input" style={{flex: 3}} />
-                <input name="cc" placeholder="Code (e.g. ME 221)" required className="pro-input" style={{flex: 1}} />
-                <button type="submit" className="pro-btn-primary" style={{padding: '12px 30px', boxShadow: '0 10px 15px rgba(0, 104, 55, 0.2)'}}>+ Add to Ledger</button>
+            <div className="panel p-6 sm:p-7">
+              <div className="mb-5 flex items-center gap-3">
+                <span className="grid size-10 place-items-center rounded-2xl bg-gradient-to-br from-brand-600 to-iris-600 text-white shadow-[var(--shadow-glow)]">
+                  <BookOpen size={18} />
+                </span>
+                <h3 className="text-base font-bold text-slate-800 dark:text-slate-100">Register New Course</h3>
+              </div>
+              <form onSubmit={addCourse} className="flex flex-col gap-3 sm:flex-row sm:flex-wrap">
+                <input name="cn" placeholder="Course Title (e.g. Thermodynamics)" required className="field sm:flex-[3]" />
+                <input name="cc" placeholder="Code (e.g. ME 221)" required className="field sm:flex-1" />
+                <Button type="submit" variant="success" className="sm:w-auto">
+                  <UserPlus size={18} /> Add to Ledger
+                </Button>
               </form>
             </div>
 
-            <div className="course-grid" style={{marginTop: '30px'}}>
+            <div className="mt-7 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
               {courses.map(c => (
                 <MotionDiv
                   key={c.id}
-                  className="course-card"
                   onClick={() => { setActiveCourse(c); setView('session'); }}
-                  style={{padding: '25px', border: '1px solid var(--border-color)'}}
-                  whileHover={{ y: -5, boxShadow: '0 16px 30px rgba(0, 51, 102, 0.12)' }}
+                  whileHover={{ y: -5 }}
                   whileTap={{ scale: 0.99 }}
                   transition={{ type: 'spring', stiffness: 280, damping: 22 }}
+                  className="panel group flex cursor-pointer items-center gap-4 p-5 hover:border-brand-200 dark:hover:border-iris-500/40"
                 >
-                  <div className="course-icon" style={{background: 'rgba(0, 51, 102, 0.1)', color: 'var(--knust-blue)'}}><BookOpen size={28} /></div>
-                  <div className="course-info">
-                    <strong style={{fontSize: '1.2rem'}}>{c.code}</strong>
-                    <p style={{color: 'var(--text-muted)', fontSize: '0.9rem'}}>{c.name}</p>
+                  <div className="grid size-12 shrink-0 place-items-center rounded-2xl bg-brand-50 text-brand-700 transition-colors group-hover:bg-brand-100 dark:bg-white/5 dark:text-iris-300">
+                    <BookOpen size={24} />
                   </div>
-                  <ChevronRight size={20} style={{marginLeft: 'auto', opacity: 0.3}} />
+                  <div className="min-w-0">
+                    <strong className="block truncate text-lg text-slate-800 dark:text-slate-100">{c.code}</strong>
+                    <p className="truncate text-sm text-slate-500 dark:text-slate-400">{c.name}</p>
+                  </div>
+                  <ChevronRight size={20} className="ml-auto shrink-0 text-slate-300 transition-transform group-hover:translate-x-1 group-hover:text-brand-500" />
                 </MotionDiv>
               ))}
+              {courses.length === 0 && (
+                <div className="panel-muted col-span-full grid place-items-center px-6 py-12 text-center">
+                  <BookOpen size={40} className="mb-3 text-slate-300" />
+                  <p className="text-sm font-medium text-slate-500 dark:text-slate-400">No courses yet — register one above to get started.</p>
+                </div>
+              )}
             </div>
-          </div>
+          </MotionDiv>
         )}
 
         {view === 'session' && activeCourse && (
-          <div className="session fade-in">
-            <div className="session-header-card" style={{borderTop: '5px solid var(--knust-green)'}}>
-              <div className="week-selector-box">
-                <label style={{fontSize: '0.8rem', fontWeight: '700', color: 'var(--text-muted)', display: 'block', marginBottom: '8px'}}>SESSION WEEK</label>
-                <select value={currentWeek} onChange={(e) => setCurrentWeek(parseInt(e.target.value))} className="week-dropdown" style={{minWidth: '150px'}}>
+          <MotionDiv
+            initial={{ opacity: 0, y: 16 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.4, ease: [0.22, 1, 0.36, 1] }}
+            className="mx-auto flex max-w-6xl flex-col gap-5"
+          >
+            {/* Week + export */}
+            <div className="panel flex flex-col gap-4 p-5 sm:flex-row sm:items-end sm:justify-between">
+              <div>
+                <label className="mb-2 block text-xs font-bold uppercase tracking-wide text-slate-500 dark:text-slate-400">Session Week</label>
+                <select value={currentWeek} onChange={(e) => setCurrentWeek(parseInt(e.target.value))} className="field sm:w-56">
                   {WEEKS.map(w => <option key={w} value={w}>Academic Week {w}</option>)}
                 </select>
               </div>
-              <button onClick={() => downloadCSV()} className="btn-download" style={{background: 'var(--knust-blue)', height: 'fit-content'}}>
-                <FileSpreadsheet size={18}/> Export CSV (Week {currentWeek})
-              </button>
+              <Button variant="brand" onClick={() => downloadCSV()} className="sm:w-auto">
+                <FileSpreadsheet size={18} /> Export CSV (Week {currentWeek})
+              </Button>
             </div>
 
-            <div className="table-card" style={{borderLeft: '6px solid var(--knust-blue)'}}>
-              <div style={{display: 'flex', justifyContent: 'space-between', gap: '20px', alignItems: 'center', flexWrap: 'wrap'}}>
-                <div style={{display: 'flex', gap: '14px', alignItems: 'center'}}>
-                  <Upload size={32} color="var(--knust-blue)" />
+            {/* Roster */}
+            <div className="panel p-5 sm:p-6">
+              <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex items-start gap-3">
+                  <span className="grid size-11 shrink-0 place-items-center rounded-2xl bg-brand-50 text-brand-700 dark:bg-white/5 dark:text-iris-300">
+                    <Upload size={22} />
+                  </span>
                   <div>
-                    <h3 style={{fontSize: '1rem', color: 'var(--knust-blue)', marginBottom: '4px'}}>Course Roster</h3>
-                    <p style={{color: 'var(--text-muted)', fontSize: '0.9rem'}}>Students loaded: <strong>{activeCourse.rosterCount || 0}</strong></p>
-                    <p style={{color: 'var(--text-muted)', fontSize: '0.8rem'}}>Device format: KNUST_STU_INDEXNO or KNUST_STU_STUDENTID</p>
+                    <h3 className="text-base font-bold text-slate-800 dark:text-slate-100">Course Roster</h3>
+                    <p className="text-sm text-slate-500 dark:text-slate-400">Students loaded: <strong className="text-slate-700 dark:text-slate-200">{activeCourse.rosterCount || 0}</strong></p>
+                    <p className="text-xs text-slate-400">Device format: KNUST_STU_INDEXNO or KNUST_STU_STUDENTID</p>
                   </div>
                 </div>
 
-                <label className="pro-btn-primary" style={{padding: '12px 24px', display: 'flex', alignItems: 'center', gap: '8px', cursor: isRosterUploading ? 'not-allowed' : 'pointer', opacity: isRosterUploading ? 0.7 : 1}}>
+                <label className={cn(
+                  'inline-flex cursor-pointer items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-brand-600 to-iris-600 px-5 py-3 text-sm font-semibold text-white shadow-[var(--shadow-card)] transition-opacity hover:opacity-95',
+                  isRosterUploading && 'cursor-not-allowed opacity-70'
+                )}>
                   <FileSpreadsheet size={18} />
-                  {isRosterUploading ? 'Importing...' : 'Upload CSV/Excel'}
-                  <input
-                    type="file"
-                    accept=".csv,.xlsx"
-                    onChange={handleRosterUpload}
-                    disabled={isRosterUploading}
-                    style={{display: 'none'}}
-                  />
+                  {isRosterUploading ? 'Importing…' : 'Upload CSV/Excel'}
+                  <input type="file" accept=".csv,.xlsx" onChange={handleRosterUpload} disabled={isRosterUploading} className="hidden" />
                 </label>
               </div>
 
               {rosterStatus && (
-                <div style={{
-                  marginTop: '16px',
-                  padding: '12px',
-                  borderRadius: '12px',
-                  background: rosterStatus.startsWith('Imported') ? '#f0fdf4' : '#fffbeb',
-                  color: rosterStatus.startsWith('Imported') ? '#166534' : '#92400e',
-                  border: rosterStatus.startsWith('Imported') ? '1px solid #bbf7d0' : '1px solid #fde68a',
-                  fontSize: '0.88rem',
-                  fontWeight: 600
-                }}>
+                <div className={cn(
+                  'mt-4 rounded-2xl border px-4 py-3 text-sm font-semibold',
+                  rosterStatus.startsWith('Imported')
+                    ? 'border-grass-200 bg-grass-50 text-grass-700 dark:border-grass-500/30 dark:bg-grass-500/10 dark:text-grass-300'
+                    : 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300'
+                )}>
                   {rosterStatus}
                 </div>
               )}
 
-              <form onSubmit={handleManualStudentAdd} className="manual-student-form" style={{display: 'grid', gridTemplateColumns: 'repeat(4, minmax(140px, 1fr)) auto', gap: '12px', marginTop: '18px'}}>
-                <input
-                  className="pro-input"
-                  placeholder="Student ID"
-                  value={manualStudent.studentID}
-                  onChange={(e) => setManualStudent({...manualStudent, studentID: e.target.value})}
-                  required
-                />
-                <input
-                  className="pro-input"
-                  placeholder="Index No."
-                  value={manualStudent.indexNumber}
-                  onChange={(e) => setManualStudent({...manualStudent, indexNumber: e.target.value})}
-                />
-                <input
-                  className="pro-input"
-                  placeholder="Reference No."
-                  value={manualStudent.referenceNumber}
-                  onChange={(e) => setManualStudent({...manualStudent, referenceNumber: e.target.value})}
-                />
-                <input
-                  className="pro-input"
-                  placeholder="Full Name"
-                  value={manualStudent.fullName}
-                  onChange={(e) => setManualStudent({...manualStudent, fullName: e.target.value})}
-                  required
-                />
-                <button type="submit" className="pro-btn-primary" style={{display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px'}}>
-                  <UserPlus size={18} /> Add
-                </button>
+              <form onSubmit={handleManualStudentAdd} className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                <input className="field" placeholder="Student ID" value={manualStudent.studentID} onChange={(e) => setManualStudent({ ...manualStudent, studentID: e.target.value })} required />
+                <input className="field" placeholder="Index No." value={manualStudent.indexNumber} onChange={(e) => setManualStudent({ ...manualStudent, indexNumber: e.target.value })} />
+                <input className="field" placeholder="Reference No." value={manualStudent.referenceNumber} onChange={(e) => setManualStudent({ ...manualStudent, referenceNumber: e.target.value })} />
+                <input className="field" placeholder="Full Name" value={manualStudent.fullName} onChange={(e) => setManualStudent({ ...manualStudent, fullName: e.target.value })} required />
+                <Button type="submit" variant="outline" className="xl:col-span-4 xl:w-auto xl:justify-self-end">
+                  <UserPlus size={18} /> Add Student
+                </Button>
               </form>
             </div>
 
-            <div className="table-card" style={{borderLeft: `6px solid ${activeSession?.active ? 'var(--knust-green)' : 'var(--knust-yellow)'}`}}>
-              <div style={{display: 'flex', justifyContent: 'space-between', gap: '20px', alignItems: 'center', flexWrap: 'wrap'}}>
-                <div style={{display: 'flex', gap: '14px', alignItems: 'center'}}>
-                  <KeyRound size={34} color="var(--knust-blue)" />
+            {/* PIN session */}
+            <div className="panel p-5 sm:p-6">
+              <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex items-start gap-3">
+                  <span className="grid size-11 shrink-0 place-items-center rounded-2xl bg-gradient-to-br from-brand-600 via-iris-600 to-grass-600 text-white shadow-[var(--shadow-glow)]">
+                    <KeyRound size={22} />
+                  </span>
                   <div>
-                    <h3 style={{fontSize: '1rem', color: 'var(--knust-blue)', marginBottom: '4px'}}>PIN + GPS Attendance Session</h3>
-                    <p style={{color: 'var(--text-muted)', fontSize: '0.9rem'}}>Current PIN: <strong style={{fontSize: '1.35rem', letterSpacing: '3px'}}>{currentSessionPin}</strong></p>
-                    <p style={{color: 'var(--text-muted)', fontSize: '0.8rem'}}>
+                    <h3 className="text-base font-bold text-slate-800 dark:text-slate-100">PIN + GPS Attendance Session</h3>
+                    <p className="text-sm text-slate-500 dark:text-slate-400">
+                      Current PIN: <strong className="ml-1 font-mono text-2xl tracking-[0.3em] text-brand-700 dark:text-iris-300">{currentSessionPin}</strong>
+                    </p>
+                    <p className="mt-1 text-xs text-slate-400">
                       Next rotation: {formatCountdown(pinSecondsRemaining)}. GPS threshold: {PIN_DISTANCE_METERS}m.
                       {sessionSecret?.lecturerLocation?.accuracy ? ` Accuracy: +/-${sessionSecret.lecturerLocation.accuracy}m.` : ''}
                     </p>
                   </div>
                 </div>
 
-                <button
+                <Button
                   onClick={activeSession?.active ? endBleSession : startPinSession}
                   disabled={isBleBusy}
-                  className={`scan-btn-master ${activeSession?.active ? 'is-active' : ''}`}
-                  style={{minWidth: '220px'}}
+                  isLoading={isBleBusy}
+                  variant={activeSession?.active ? 'danger' : 'success'}
+                  size="lg"
+                  className="sm:min-w-56"
                 >
-                  {activeSession?.active ? <Power size={18} /> : <MapPin size={18} />}
-                  {isBleBusy ? 'Processing...' : activeSession?.active ? 'End Session' : 'Start PIN Session'}
-                </button>
+                  {!isBleBusy && (activeSession?.active ? <Power size={18} /> : <MapPin size={18} />)}
+                  {isBleBusy ? 'Processing…' : activeSession?.active ? 'End Session' : 'Start PIN Session'}
+                </Button>
               </div>
 
-              <div style={{display: 'flex', gap: '12px', flexWrap: 'wrap', marginTop: '18px'}}>
-                <button
-                  onClick={() => setIsQrFallbackOpen(prev => !prev)}
-                  className="btn-download"
-                  style={{background: 'var(--knust-blue)', padding: '10px 16px'}}
-                >
+              <div className="mt-4 flex flex-wrap gap-3">
+                <Button variant="brand" size="sm" onClick={() => setIsQrFallbackOpen(prev => !prev)}>
                   <QrCode size={18} /> {isQrFallbackOpen ? 'Close QR Fallback' : 'Open QR Fallback'}
-                </button>
+                </Button>
               </div>
 
               {bleStatus && (
-                <div style={{
-                  marginTop: '18px',
-                  padding: '12px',
-                  borderRadius: '12px',
-                  display: 'flex',
-                  gap: '10px',
-                  alignItems: 'flex-start',
-                  background: activeSession?.active ? '#f0fdf4' : '#fffbeb',
-                  color: activeSession?.active ? '#166534' : '#92400e',
-                  border: activeSession?.active ? '1px solid #bbf7d0' : '1px solid #fde68a'
-                }}>
-                  {activeSession?.active ? <CheckCircle size={18} /> : <AlertCircle size={18} />}
-                  <span style={{fontSize: '0.88rem', fontWeight: 600}}>{bleStatus}</span>
+                <div className={cn(
+                  'mt-4 flex items-start gap-2.5 rounded-2xl border px-4 py-3 text-sm font-semibold',
+                  activeSession?.active
+                    ? 'border-grass-200 bg-grass-50 text-grass-700 dark:border-grass-500/30 dark:bg-grass-500/10 dark:text-grass-300'
+                    : 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300'
+                )}>
+                  {activeSession?.active ? <CheckCircle size={18} className="shrink-0" /> : <AlertCircle size={18} className="shrink-0" />}
+                  <span>{bleStatus}</span>
                 </div>
               )}
 
               {isQrFallbackOpen && (
-                <div style={{maxWidth: '520px', margin: '20px auto 0', borderRadius: '18px', overflow: 'hidden', border: '3px solid var(--knust-blue)', background: '#fff', padding: '12px'}}>
-                  <Suspense fallback={<div style={{padding: '24px', textAlign: 'center', color: 'var(--text-muted)'}}>Loading scanner...</div>}>
+                <div className="mx-auto mt-5 max-w-xl overflow-hidden rounded-3xl border-2 border-brand-200 bg-white p-3 dark:border-iris-500/40 dark:bg-slate-900">
+                  <Suspense fallback={<div className="p-6 text-center text-sm text-slate-400">Loading scanner…</div>}>
                     <Scanner onResult={handleQrScanSuccess} onClose={() => setIsQrFallbackOpen(false)} />
                   </Suspense>
                 </div>
               )}
 
-              <form onSubmit={handleManualPresenceVerification} className="manual-student-form" style={{display: 'grid', gridTemplateColumns: 'minmax(160px, 0.9fr) minmax(240px, 1.5fr) auto', gap: '12px', marginTop: '18px'}}>
-                <input
-                  className="pro-input"
-                  placeholder="Student ID"
-                  value={manualVerification.studentID}
-                  onChange={(event) => setManualVerification({...manualVerification, studentID: event.target.value})}
-                  required
-                />
-                <input
-                  className="pro-input"
-                  placeholder="Reason for manual verification"
-                  value={manualVerification.reason}
-                  onChange={(event) => setManualVerification({...manualVerification, reason: event.target.value})}
-                  required
-                />
-                <button type="submit" disabled={isBleBusy} className="pro-btn-primary" style={{display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px'}}>
+              <form onSubmit={handleManualPresenceVerification} className="mt-5 grid gap-3 sm:grid-cols-[minmax(0,0.9fr)_minmax(0,1.5fr)_auto]">
+                <input className="field" placeholder="Student ID" value={manualVerification.studentID} onChange={(event) => setManualVerification({ ...manualVerification, studentID: event.target.value })} required />
+                <input className="field" placeholder="Reason for manual verification" value={manualVerification.reason} onChange={(event) => setManualVerification({ ...manualVerification, reason: event.target.value })} required />
+                <Button type="submit" variant="iris" disabled={isBleBusy}>
                   <UserPlus size={18} /> Verify Present
-                </button>
+                </Button>
                 {manualVerificationLookupStatus && (
-                  <div style={{
-                    gridColumn: '1 / -1',
-                    padding: '10px 12px',
-                    borderRadius: '12px',
-                    background: manualVerificationStudent ? '#f0fdf4' : '#fffbeb',
-                    color: manualVerificationStudent ? '#166534' : '#92400e',
-                    border: manualVerificationStudent ? '1px solid #bbf7d0' : '1px solid #fde68a',
-                    fontSize: '0.84rem',
-                    fontWeight: 700
-                  }}>
+                  <div className={cn(
+                    'rounded-2xl border px-4 py-2.5 text-sm font-semibold sm:col-span-full',
+                    manualVerificationStudent
+                      ? 'border-grass-200 bg-grass-50 text-grass-700 dark:border-grass-500/30 dark:bg-grass-500/10 dark:text-grass-300'
+                      : 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300'
+                  )}>
                     {manualVerificationLookupStatus}
                   </div>
                 )}
               </form>
             </div>
 
-            <div className="action-row" style={{display: 'flex', gap: '15px', marginBottom: '25px'}}>
-              <div className="search-bar" style={{flex: 2, background: 'var(--card-bg)', border: '1px solid var(--border-color)', padding: '0 12px', borderRadius: '12px', display: 'flex', alignItems: 'center', gap: '10px'}}>
-                <Search size={18} color="#94a3b8" />
-                <input placeholder="Search student ID or Name..." onChange={(e) => setSearchTerm(e.target.value)} style={{border: 'none', outline: 'none', background: 'transparent', width: '100%', padding: '14px', color: 'var(--text-main)'}} />
-              </div>
+            {/* Search */}
+            <div className="relative">
+              <Search size={18} className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
+              <input
+                placeholder="Search student ID or name…"
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="field h-12 pl-11"
+              />
             </div>
 
-            <div className="table-card table-wrapper">
-              <div style={{padding: '20px', borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap'}}>
-                <h3 style={{fontSize: '1rem'}}>Live Attendance List</h3>
-                <span style={{fontSize: '0.8rem', color: 'var(--knust-green)', fontWeight: '700'}}>{currentRecords.length} Students Present</span>
+            {/* Live attendance table */}
+            <div className="panel overflow-hidden">
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 px-5 py-4 dark:border-white/10">
+                <h3 className="text-base font-bold text-slate-800 dark:text-slate-100">Live Attendance List</h3>
+                <span className="rounded-full bg-grass-50 px-3 py-1 text-xs font-bold text-grass-700 dark:bg-grass-500/10 dark:text-grass-300">
+                  {currentRecords.length} Present
+                </span>
               </div>
-              <table className="pro-table">
-                <thead><tr><th>Student Details</th><th>Index / Ref</th><th>Check-in Time</th><th>Method</th><th>Verification</th></tr></thead>
-                <tbody>
-                  {sortedCurrentRecords
-                    .filter(s => (
-                      (s.studentID || '').includes(searchTerm) ||
-                      (s.indexNumber || '').includes(searchTerm) ||
-                      (s.referenceNumber || '').includes(searchTerm) ||
-                      (s.fullName || '').toLowerCase().includes(searchTerm.toLowerCase())
-                    ))
-                    .map((s, i) => (
-                      <tr key={`${s.studentID}-${i}`}>
-                        <td><div className="student-cell"><span className="s-id">{s.studentID}</span><span className="s-name">{s.fullName}</span></div></td>
-                        <td><div className="student-cell"><span className="s-id">{s.indexNumber || 'N/A'}</span><span className="s-name">{s.referenceNumber || 'No ref'}</span></div></td>
-                        <td>{s.timeVerified}</td>
-                        <td>{s.method || 'PIN + GPS'}</td>
-                        <td><span className="status-tag-verified" style={{display: 'flex', alignItems: 'center', gap: '5px', width: 'fit-content'}}><CheckCircle size={12}/> Verified</span></td>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-left text-xs font-semibold uppercase tracking-wide text-slate-400">
+                      <th className="px-5 py-3">Student Details</th>
+                      <th className="px-5 py-3">Index / Ref</th>
+                      <th className="px-5 py-3">Check-in</th>
+                      <th className="px-5 py-3">Method</th>
+                      <th className="px-5 py-3">Verification</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {sortedCurrentRecords
+                      .filter(s => (
+                        (s.studentID || '').includes(searchTerm) ||
+                        (s.indexNumber || '').includes(searchTerm) ||
+                        (s.referenceNumber || '').includes(searchTerm) ||
+                        (s.fullName || '').toLowerCase().includes(searchTerm.toLowerCase())
+                      ))
+                      .map((s, i) => (
+                        <tr key={`${s.studentID}-${i}`} className="border-t border-slate-100 dark:border-white/5">
+                          <td className="px-5 py-3">
+                            <div className="flex flex-col">
+                              <span className="font-semibold text-slate-800 dark:text-slate-100">{s.studentID}</span>
+                              <span className="text-xs text-slate-400">{s.fullName}</span>
+                            </div>
+                          </td>
+                          <td className="px-5 py-3">
+                            <div className="flex flex-col">
+                              <span className="font-medium text-slate-700 dark:text-slate-200">{s.indexNumber || 'N/A'}</span>
+                              <span className="text-xs text-slate-400">{s.referenceNumber || 'No ref'}</span>
+                            </div>
+                          </td>
+                          <td className="px-5 py-3 text-slate-600 dark:text-slate-300">{s.timeVerified}</td>
+                          <td className="px-5 py-3 text-slate-600 dark:text-slate-300">{s.method || 'PIN + GPS'}</td>
+                          <td className="px-5 py-3">
+                            <span className="inline-flex w-fit items-center gap-1.5 rounded-full bg-grass-50 px-2.5 py-1 text-xs font-semibold text-grass-700 dark:bg-grass-500/10 dark:text-grass-300">
+                              <CheckCircle size={12} /> Verified
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    {currentRecords.length === 0 && (
+                      <tr>
+                        <td colSpan={5} className="px-5 py-12 text-center text-sm text-slate-400">
+                          No students have checked in yet.
+                        </td>
                       </tr>
-                    ))}
-                </tbody>
-              </table>
+                    )}
+                  </tbody>
+                </table>
+              </div>
             </div>
-          </div>
+          </MotionDiv>
         )}
 
         {view === 'history' && activeCourse && (
-          <div className="history-view fade-in">
-            <div className="history-header" style={{marginBottom: '30px'}}>
-              <button onClick={() => setView('session')} className="back-btn" style={{marginBottom: '20px'}}><ArrowLeft size={18}/> Back to Active Session</button>
-              <h2 style={{fontSize: '2rem', color: 'var(--knust-blue)', fontWeight: '900'}}>Semester Ledger: {activeCourse.code}</h2>
-              <p style={{color: 'var(--text-muted)'}}>Search attendance by student name, ID, index number, reference number, session, and date.</p>
+          <MotionDiv
+            initial={{ opacity: 0, y: 16 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.4, ease: [0.22, 1, 0.36, 1] }}
+            className="mx-auto flex max-w-6xl flex-col gap-5"
+          >
+            <div>
+              <Button variant="ghost" size="sm" onClick={() => setView('session')} className="mb-4">
+                <ArrowLeft size={18} /> Back to Active Session
+              </Button>
+              <h2 className="text-2xl font-extrabold sm:text-3xl">
+                Semester Ledger: <span className="text-gradient">{activeCourse.code}</span>
+              </h2>
+              <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+                Search attendance by student name, ID, index number, reference number, session, and date.
+              </p>
             </div>
 
-            <div className="stats-grid">
-              <div className="stat-card" style={{borderLeft: '5px solid var(--knust-blue)'}}><h3>Total Verifications</h3><p>{historyRows.length}</p></div>
-              <div className="stat-card" style={{borderLeft: '5px solid var(--knust-green)'}}><h3>Unique Students</h3><p>{new Set(historyRows.map(s => s.studentID)).size}</p></div>
-              <div className="stat-card" style={{borderLeft: '5px solid var(--knust-yellow)'}}><h3>Weeks Recorded</h3><p>{WEEKS.filter(w => attendance[getSessionKey(activeCourse.code, w)]?.length > 0).length}</p></div>
-              <div className="stat-card" style={{borderLeft: '5px solid var(--knust-green)'}}><h3>Semester Rate</h3><p>{historyAttendanceRate}%</p></div>
-            </div>
-
-            <div className="table-card">
-              <div className="history-toolbar" style={{display: 'flex', gap: '12px', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap'}}>
-                <div className="search-bar" style={{flex: '1 1 280px', background: 'var(--card-bg)', border: '1px solid var(--border-color)', padding: '0 12px', borderRadius: '12px', display: 'flex', alignItems: 'center', gap: '10px'}}>
-                  <Search size={18} color="#94a3b8" />
-                  <input
-                    placeholder="Search name, student ID, index no., or reference no."
-                    value={historySearchTerm}
-                    onChange={(e) => setHistorySearchTerm(e.target.value)}
-                    style={{border: 'none', outline: 'none', background: 'transparent', width: '100%', padding: '14px', color: 'var(--text-main)'}}
-                  />
+            {/* Stats */}
+            <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+              {[
+                { label: 'Total Verifications', value: historyRows.length, accent: 'from-brand-600 to-brand-400' },
+                { label: 'Unique Students', value: new Set(historyRows.map(s => s.studentID)).size, accent: 'from-iris-600 to-iris-400' },
+                { label: 'Weeks Recorded', value: WEEKS.filter(w => attendance[getSessionKey(activeCourse.code, w)]?.length > 0).length, accent: 'from-grass-600 to-grass-400' },
+                { label: 'Semester Rate', value: `${historyAttendanceRate}%`, accent: 'from-brand-600 via-iris-600 to-grass-600' }
+              ].map(stat => (
+                <div key={stat.label} className="panel relative overflow-hidden p-5">
+                  <span className={cn('absolute inset-x-0 top-0 h-1 bg-gradient-to-r', stat.accent)} />
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">{stat.label}</p>
+                  <p className="mt-2 text-2xl font-extrabold text-slate-800 dark:text-slate-100">{stat.value}</p>
                 </div>
-                <button
-                  className="btn-download"
-                  onClick={() => setHistorySortDirection(prev => prev === 'asc' ? 'desc' : 'asc')}
-                  style={{padding: '10px 16px'}}
-                >
+              ))}
+            </div>
+
+            {/* History toolbar */}
+            <div className="panel flex flex-col gap-3 p-4 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
+              <div className="relative flex-1 sm:min-w-[280px]">
+                <Search size={18} className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
+                <input
+                  placeholder="Search name, student ID, index no., or reference no."
+                  value={historySearchTerm}
+                  onChange={(e) => setHistorySearchTerm(e.target.value)}
+                  className="field h-12 pl-11"
+                />
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Button variant="outline" size="sm" onClick={() => setHistorySortDirection(prev => prev === 'asc' ? 'desc' : 'asc')}>
                   {historySortDirection === 'asc' ? <SortAsc size={18} /> : <SortDesc size={18} />}
                   ID {historySortDirection === 'asc' ? 'Ascending' : 'Descending'}
-                </button>
-                <button className="btn-download" onClick={loadCourseHistory} style={{padding: '10px 16px'}}>
-                  <ClipboardList size={18} /> {isHistoryLoading ? 'Refreshing...' : 'Refresh'}
-                </button>
+                </Button>
+                <Button variant="outline" size="sm" onClick={loadCourseHistory}>
+                  <ClipboardList size={18} /> {isHistoryLoading ? 'Refreshing…' : 'Refresh'}
+                </Button>
               </div>
             </div>
 
-            <div className="table-card table-wrapper" style={{borderLeft: '6px solid var(--knust-green)'}}>
-              <div style={{padding: '20px', borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap'}}>
+            {/* Correction console */}
+            <div className="panel overflow-hidden">
+              <div className="flex flex-col gap-3 border-b border-slate-100 px-5 py-4 lg:flex-row lg:items-center lg:justify-between dark:border-white/10">
                 <div>
-                  <h3 style={{fontSize: '1rem'}}>Session Correction Console</h3>
-                  <p style={{fontSize: '0.82rem', color: 'var(--text-muted)', marginTop: '4px'}}>Edit attendance for any week, including sessions that have already ended.</p>
+                  <h3 className="text-base font-bold text-slate-800 dark:text-slate-100">Session Correction Console</h3>
+                  <p className="mt-0.5 text-xs text-slate-400">Edit attendance for any week, including sessions that have already ended.</p>
                 </div>
-                <div style={{display: 'flex', gap: '10px', flexWrap: 'wrap'}}>
-                  <select value={editWeek} onChange={(e) => setEditWeek(parseInt(e.target.value))} className="week-dropdown">
+                <div className="flex flex-wrap gap-2">
+                  <select value={editWeek} onChange={(e) => setEditWeek(parseInt(e.target.value))} className="field h-11 w-auto">
                     {WEEKS.map(w => <option key={w} value={w}>Week {w}</option>)}
                   </select>
-                  <div className="search-bar" style={{background: 'var(--card-bg)', border: '1px solid var(--border-color)', padding: '0 12px', borderRadius: '12px', display: 'flex', alignItems: 'center', gap: '10px'}}>
-                    <Search size={18} color="#94a3b8" />
+                  <div className="relative">
+                    <Search size={18} className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
                     <input
-                      placeholder="Find student to correct..."
+                      placeholder="Find student to correct…"
                       value={editSearchTerm}
                       onChange={(e) => setEditSearchTerm(e.target.value)}
-                      style={{border: 'none', outline: 'none', background: 'transparent', width: '220px', padding: '12px', color: 'var(--text-main)'}}
+                      className="field h-11 pl-10 sm:w-56"
                     />
                   </div>
                 </div>
               </div>
 
               {correctionStatus && (
-                <div style={{
-                  margin: '16px 20px',
-                  padding: '12px',
-                  borderRadius: '12px',
-                  background: correctionStatus.includes('Unable') ? '#fee2e2' : '#f0fdf4',
-                  color: correctionStatus.includes('Unable') ? '#b91c1c' : '#166534',
-                  border: correctionStatus.includes('Unable') ? '1px solid #fecaca' : '1px solid #bbf7d0',
-                  fontSize: '0.88rem',
-                  fontWeight: 700
-                }}>
+                <div className={cn(
+                  'mx-5 mt-4 rounded-2xl border px-4 py-3 text-sm font-semibold',
+                  correctionStatus.includes('Unable')
+                    ? 'border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-300'
+                    : 'border-grass-200 bg-grass-50 text-grass-700 dark:border-grass-500/30 dark:bg-grass-500/10 dark:text-grass-300'
+                )}>
                   {correctionStatus}
                 </div>
               )}
 
-              <table className="pro-table">
-                <thead><tr><th>Student</th><th>Index / Ref</th><th>Week {editWeek} Status</th><th>Last Method</th><th>Correction</th></tr></thead>
-                <tbody>
-                  {editableSessionRows.map(student => (
-                    <tr key={`edit-${student.studentID}`}>
-                      <td><div className="student-cell"><span className="s-id">{student.studentID}</span><span className="s-name">{student.fullName}</span></div></td>
-                      <td><div className="student-cell"><span className="s-id">{student.indexNumber || 'N/A'}</span><span className="s-name">{student.referenceNumber || 'No ref'}</span></div></td>
-                      <td>
-                        <span className={student.isPresent ? 'status-tag-verified' : 'status-tag-absent'}>
-                          {student.isPresent ? 'Present' : 'Absent'}
-                        </span>
-                      </td>
-                      <td>{student.method || 'N/A'}</td>
-                      <td>
-                        <div style={{display: 'flex', gap: '8px', flexWrap: 'wrap'}}>
-                          <button
-                            type="button"
-                            className="mini-action-btn present"
-                            disabled={isCorrectionSaving || student.isPresent}
-                            onClick={() => markStudentPresentForWeek(student, editWeek)}
-                          >
-                            Mark Present
-                          </button>
-                          <button
-                            type="button"
-                            className="mini-action-btn absent"
-                            disabled={isCorrectionSaving || !student.isPresent}
-                            onClick={() => markStudentAbsentForWeek(student, editWeek)}
-                          >
-                            Mark Absent
-                          </button>
-                        </div>
-                      </td>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-left text-xs font-semibold uppercase tracking-wide text-slate-400">
+                      <th className="px-5 py-3">Student</th>
+                      <th className="px-5 py-3">Index / Ref</th>
+                      <th className="px-5 py-3">Week {editWeek} Status</th>
+                      <th className="px-5 py-3">Last Method</th>
+                      <th className="px-5 py-3">Correction</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {editableSessionRows.map(student => (
+                      <tr key={`edit-${student.studentID}`} className="border-t border-slate-100 dark:border-white/5">
+                        <td className="px-5 py-3">
+                          <div className="flex flex-col">
+                            <span className="font-semibold text-slate-800 dark:text-slate-100">{student.studentID}</span>
+                            <span className="text-xs text-slate-400">{student.fullName}</span>
+                          </div>
+                        </td>
+                        <td className="px-5 py-3">
+                          <div className="flex flex-col">
+                            <span className="font-medium text-slate-700 dark:text-slate-200">{student.indexNumber || 'N/A'}</span>
+                            <span className="text-xs text-slate-400">{student.referenceNumber || 'No ref'}</span>
+                          </div>
+                        </td>
+                        <td className="px-5 py-3">
+                          <span className={cn(
+                            'inline-flex w-fit items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold',
+                            student.isPresent
+                              ? 'bg-grass-50 text-grass-700 dark:bg-grass-500/10 dark:text-grass-300'
+                              : 'bg-rose-50 text-rose-600 dark:bg-rose-500/10 dark:text-rose-300'
+                          )}>
+                            {student.isPresent ? 'Present' : 'Absent'}
+                          </span>
+                        </td>
+                        <td className="px-5 py-3 text-slate-600 dark:text-slate-300">{student.method || 'N/A'}</td>
+                        <td className="px-5 py-3">
+                          <div className="flex flex-wrap gap-2">
+                            <button
+                              type="button"
+                              className="rounded-xl bg-grass-600 px-3 py-1.5 text-xs font-semibold text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+                              disabled={isCorrectionSaving || student.isPresent}
+                              onClick={() => markStudentPresentForWeek(student, editWeek)}
+                            >
+                              Mark Present
+                            </button>
+                            <button
+                              type="button"
+                              className="rounded-xl bg-rose-500 px-3 py-1.5 text-xs font-semibold text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+                              disabled={isCorrectionSaving || !student.isPresent}
+                              onClick={() => markStudentAbsentForWeek(student, editWeek)}
+                            >
+                              Mark Absent
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
 
-            <div className="table-card table-wrapper">
-              <div style={{padding: '20px', borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap'}}>
+            {/* Summary */}
+            <div className="panel overflow-hidden">
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 px-5 py-4 dark:border-white/10">
                 <div>
-                  <h3 style={{fontSize: '1rem'}}>Student Attendance Summary</h3>
-                  <p style={{fontSize: '0.82rem', color: 'var(--text-muted)', marginTop: '4px'}}>Total classes attended per student for {activeCourse.code}</p>
+                  <h3 className="text-base font-bold text-slate-800 dark:text-slate-100">Student Attendance Summary</h3>
+                  <p className="mt-0.5 text-xs text-slate-400">Total classes attended per student for {activeCourse.code}</p>
                 </div>
-                <span style={{fontSize: '0.8rem', color: 'var(--knust-green)', fontWeight: '700'}}>{filteredHistorySummary.length} Students</span>
+                <span className="rounded-full bg-grass-50 px-3 py-1 text-xs font-bold text-grass-700 dark:bg-grass-500/10 dark:text-grass-300">
+                  {filteredHistorySummary.length} Students
+                </span>
               </div>
-              <table className="pro-table">
-                <thead><tr><th>Student</th><th>Index / Ref</th><th>Classes Attended</th><th>Sessions</th><th>Last Verified</th></tr></thead>
-                <tbody>
-                  {filteredHistorySummary.map((s) => (
-                    <tr key={s.studentID}>
-                      <td><div className="student-cell"><span className="s-id">{s.studentID}</span><span className="s-name">{s.fullName}</span></div></td>
-                      <td><div className="student-cell"><span className="s-id">{s.indexNumber || 'N/A'}</span><span className="s-name">{s.referenceNumber || 'No ref'}</span></div></td>
-                      <td><strong>{s.attendedCount}</strong></td>
-                      <td>{s.sessions.join(', ') || 'None'}</td>
-                      <td>{s.lastVerified || 'Not yet verified'}</td>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-left text-xs font-semibold uppercase tracking-wide text-slate-400">
+                      <th className="px-5 py-3">Student</th>
+                      <th className="px-5 py-3">Index / Ref</th>
+                      <th className="px-5 py-3">Attended</th>
+                      <th className="px-5 py-3">Sessions</th>
+                      <th className="px-5 py-3">Last Verified</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {filteredHistorySummary.map((s) => (
+                      <tr key={s.studentID} className="border-t border-slate-100 dark:border-white/5">
+                        <td className="px-5 py-3">
+                          <div className="flex flex-col">
+                            <span className="font-semibold text-slate-800 dark:text-slate-100">{s.studentID}</span>
+                            <span className="text-xs text-slate-400">{s.fullName}</span>
+                          </div>
+                        </td>
+                        <td className="px-5 py-3">
+                          <div className="flex flex-col">
+                            <span className="font-medium text-slate-700 dark:text-slate-200">{s.indexNumber || 'N/A'}</span>
+                            <span className="text-xs text-slate-400">{s.referenceNumber || 'No ref'}</span>
+                          </div>
+                        </td>
+                        <td className="px-5 py-3"><strong className="text-slate-800 dark:text-slate-100">{s.attendedCount}</strong></td>
+                        <td className="px-5 py-3 text-slate-600 dark:text-slate-300">{s.sessions.join(', ') || 'None'}</td>
+                        <td className="px-5 py-3 text-slate-600 dark:text-slate-300">{s.lastVerified || 'Not yet verified'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
 
-            <div className="table-card table-wrapper">
-              <div style={{padding: '20px', borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap'}}>
+            {/* Complete ledger */}
+            <div className="panel overflow-hidden">
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 px-5 py-4 dark:border-white/10">
                 <div>
-                  <h3 style={{fontSize: '1rem'}}>Complete Session Ledger</h3>
-                  <p style={{fontSize: '0.82rem', color: 'var(--text-muted)', marginTop: '4px'}}>Every recorded verification by session and date</p>
+                  <h3 className="text-base font-bold text-slate-800 dark:text-slate-100">Complete Session Ledger</h3>
+                  <p className="mt-0.5 text-xs text-slate-400">Every recorded verification by session and date</p>
                 </div>
-                <span style={{fontSize: '0.8rem', color: 'var(--knust-green)', fontWeight: '700'}}>{filteredHistoryRows.length} Records</span>
+                <span className="rounded-full bg-grass-50 px-3 py-1 text-xs font-bold text-grass-700 dark:bg-grass-500/10 dark:text-grass-300">
+                  {filteredHistoryRows.length} Records
+                </span>
               </div>
-              <table className="pro-table">
-                <thead><tr><th>Student</th><th>Index / Ref</th><th>Session</th><th>Date</th><th>Method</th><th>Status</th></tr></thead>
-                <tbody>
-                  {filteredHistoryRows.map((s, idx) => (
-                    <tr key={`${s.sessionKey}-${s.studentID}-${idx}`}>
-                      <td><div className="student-cell"><span className="s-id">{s.studentID}</span><span className="s-name">{s.fullName}</span></div></td>
-                      <td><div className="student-cell"><span className="s-id">{s.indexNumber || 'N/A'}</span><span className="s-name">{s.referenceNumber || 'No ref'}</span></div></td>
-                      <td><div style={{display: 'flex', alignItems: 'center', gap: '8px'}}><CalendarDays size={14} /> Week {s.week}</div></td>
-                      <td>{s.dateTime || s.timeVerified || s.sessionDate}</td>
-                      <td>{s.method || 'PIN + GPS'}</td>
-                      <td><span className="status-tag-verified">Verified</span></td>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-left text-xs font-semibold uppercase tracking-wide text-slate-400">
+                      <th className="px-5 py-3">Student</th>
+                      <th className="px-5 py-3">Index / Ref</th>
+                      <th className="px-5 py-3">Session</th>
+                      <th className="px-5 py-3">Date</th>
+                      <th className="px-5 py-3">Method</th>
+                      <th className="px-5 py-3">Status</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {filteredHistoryRows.map((s, idx) => (
+                      <tr key={`${s.sessionKey}-${s.studentID}-${idx}`} className="border-t border-slate-100 dark:border-white/5">
+                        <td className="px-5 py-3">
+                          <div className="flex flex-col">
+                            <span className="font-semibold text-slate-800 dark:text-slate-100">{s.studentID}</span>
+                            <span className="text-xs text-slate-400">{s.fullName}</span>
+                          </div>
+                        </td>
+                        <td className="px-5 py-3">
+                          <div className="flex flex-col">
+                            <span className="font-medium text-slate-700 dark:text-slate-200">{s.indexNumber || 'N/A'}</span>
+                            <span className="text-xs text-slate-400">{s.referenceNumber || 'No ref'}</span>
+                          </div>
+                        </td>
+                        <td className="px-5 py-3">
+                          <span className="inline-flex items-center gap-2 text-slate-600 dark:text-slate-300"><CalendarDays size={14} /> Week {s.week}</span>
+                        </td>
+                        <td className="px-5 py-3 text-slate-600 dark:text-slate-300">{s.dateTime || s.timeVerified || s.sessionDate}</td>
+                        <td className="px-5 py-3 text-slate-600 dark:text-slate-300">{s.method || 'PIN + GPS'}</td>
+                        <td className="px-5 py-3">
+                          <span className="inline-flex w-fit items-center gap-1.5 rounded-full bg-grass-50 px-2.5 py-1 text-xs font-semibold text-grass-700 dark:bg-grass-500/10 dark:text-grass-300">Verified</span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
               {!isHistoryLoading && filteredHistoryRows.length === 0 && (
-                <div style={{textAlign: 'center', padding: '60px 0', opacity: 0.55}}>
-                  <Users size={56} style={{margin: '0 auto 16px'}} />
-                  <h3>No matching attendance records found.</h3>
+                <div className="px-5 py-16 text-center text-slate-400">
+                  <Users size={48} className="mx-auto mb-4 opacity-50" />
+                  <h3 className="text-sm font-medium">No matching attendance records found.</h3>
                 </div>
               )}
             </div>
-          </div>
+          </MotionDiv>
         )}
-      </main>
-    </MotionDiv>
+        </main>
+      </div>
+    </div>
+    </div>
   );
 }

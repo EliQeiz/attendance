@@ -1,5 +1,6 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import tailwindcss from '@tailwindcss/vite'
 
 const CHUNK_GROUPS = [
   { name: 'firebase', test: /node_modules[\\/](@firebase|firebase)[\\/]/ },
@@ -12,7 +13,7 @@ const CHUNK_GROUPS = [
 
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), tailwindcss()],
   build: {
     rollupOptions: {
       output: {

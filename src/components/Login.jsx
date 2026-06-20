@@ -1,5 +1,21 @@
 import React, { useState } from 'react';
-import { motion } from 'framer-motion';
+import { motion, AnimatePresence } from 'framer-motion';
+import {
+  AlertCircle,
+  ArrowRight,
+  CheckCircle2,
+  Eye,
+  EyeOff,
+  GraduationCap,
+  IdCard,
+  KeyRound,
+  Lock,
+  Mail,
+  MapPin,
+  ShieldCheck,
+  User,
+  Users
+} from 'lucide-react';
 import { auth, db } from '../firebase';
 import {
   browserLocalPersistence,
@@ -12,11 +28,20 @@ import {
   signInWithEmailAndPassword
 } from 'firebase/auth';
 import { doc, getDoc, serverTimestamp, setDoc, writeBatch } from 'firebase/firestore';
+import Button from './ui/Button';
+import Input from './ui/Input';
+import SegmentedToggle from './ui/SegmentedToggle';
+import { cn } from '../lib/cn';
+import { fadeUp, popIn, staggerChildren, listItem } from '../lib/motion';
 
 const MotionDiv = motion.div;
+const MotionUl = motion.ul;
+const MotionLi = motion.li;
+
 const STUDENT_ID_PATTERN = /^\d{8}$/;
 const STRONG_PASSWORD_PATTERN = /^(?=.*[A-Za-z])(?=.*\d).{8,}$/;
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const KNUST_LOGO = 'https://images.seeklogo.com/logo-png/35/2/kwame-nkrumah-university-of-science-technology-logo-png_seeklogo-350387.png';
 
 const buildLegacyAuthEmail = (role, id) => {
   const safeId = id.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -55,6 +80,42 @@ const getAuthMessage = (err) => {
 
   return 'Unable to continue. Please check your connection and try again.';
 };
+
+const FEATURES = [
+  { icon: KeyRound, title: 'Rotating PIN', text: 'A fresh 4-digit code every few minutes — impossible to share ahead of time.' },
+  { icon: MapPin, title: 'GPS proximity', text: 'Presence is confirmed only when you are physically in the lecture hall.' },
+  { icon: ShieldCheck, title: 'Server-verified', text: 'Every check-in is validated in the cloud, not on the device.' }
+];
+
+function PasswordField({ value, onChange, placeholder, autoComplete }) {
+  const [show, setShow] = useState(false);
+  return (
+    <div className="relative">
+      <Lock size={18} className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
+      <input
+        type={show ? 'text' : 'password'}
+        required
+        placeholder={placeholder}
+        autoComplete={autoComplete}
+        value={value}
+        onChange={onChange}
+        className={cn(
+          'h-12 w-full rounded-2xl border border-slate-200 bg-white/80 pl-11 pr-12 text-[0.95rem] text-slate-800',
+          'placeholder:text-slate-400 transition-[border,box-shadow,background] duration-200',
+          'focus:border-iris-400 focus:bg-white focus:outline-none focus:ring-4 focus:ring-iris-500/15'
+        )}
+      />
+      <button
+        type="button"
+        onClick={() => setShow((s) => !s)}
+        className="absolute right-3 top-1/2 -translate-y-1/2 rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+        aria-label={show ? 'Hide password' : 'Show password'}
+      >
+        {show ? <EyeOff size={18} /> : <Eye size={18} />}
+      </button>
+    </div>
+  );
+}
 
 export default function Login({ onLogin }) {
   const [mode, setMode] = useState('signin');
@@ -220,188 +281,246 @@ export default function Login({ onLogin }) {
     }
   };
 
+  const switchMode = (next) => {
+    setMode(next);
+    setError('');
+    setStatus('');
+  };
+
+  const title = isReset ? 'Recover account' : isSignup ? 'Create your account' : 'Welcome back';
+  const subtitle = isReset
+    ? 'Enter the recovery email linked to your account.'
+    : isSignup
+      ? 'Join the smart attendance platform in seconds.'
+      : 'Sign in to mark and manage attendance.';
+
   return (
-    <div className="knust-login-page">
+    <div className="aurora-bg min-h-dvh w-full flex items-center justify-center p-4 sm:p-6">
       <MotionDiv
-        className="login-glass-card"
-        initial={{ opacity: 0, y: 18, scale: 0.98 }}
-        animate={{ opacity: 1, y: 0, scale: 1 }}
-        transition={{ duration: 0.45, ease: 'easeOut' }}
+        variants={popIn}
+        initial="hidden"
+        animate="show"
+        className="glass relative w-full max-w-5xl overflow-hidden rounded-[2rem] shadow-[var(--shadow-glow)]"
       >
-        <img
-          src="https://images.seeklogo.com/logo-png/35/2/kwame-nkrumah-university-of-science-technology-logo-png_seeklogo-350387.png"
-          alt="KNUST Logo"
-          style={{ width: '80px', height: 'auto', marginBottom: '15px' }}
-        />
-        <h1 style={{color: '#003366', fontSize: '1.5rem'}}>KNUST Attendance</h1>
-        <p style={{color: '#64748b', marginBottom: '20px'}}>{isReset ? 'Recover Your Account' : 'Secure Portal Access'}</p>
+        <div className="grid lg:grid-cols-[1.05fr_1fr]">
+          {/* Brand / showcase panel */}
+          <div className="relative hidden overflow-hidden bg-gradient-to-br from-brand-900 via-iris-700 to-grass-700 p-10 lg:flex lg:flex-col">
+            <div className="pointer-events-none absolute -top-24 -right-20 size-72 rounded-full bg-white/10 blur-2xl" />
+            <div className="pointer-events-none absolute -bottom-28 -left-16 size-80 rounded-full bg-grass-400/20 blur-3xl" />
 
-        {!isReset && (
-          <div className="auth-mode-toggle" style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '16px'}}>
-            <button
-              type="button"
-              className={mode === 'signin' ? 'active' : ''}
-              onClick={() => { setMode('signin'); setError(''); setStatus(''); }}
+            <div className="relative flex items-center gap-3 text-white">
+              <span className="grid size-12 place-items-center rounded-2xl bg-white/15 backdrop-blur">
+                <img src={KNUST_LOGO} alt="KNUST" className="size-8 object-contain" />
+              </span>
+              <div>
+                <p className="text-sm font-semibold tracking-wide text-white/80">KNUST</p>
+                <p className="text-lg font-bold leading-tight">Smart Attendance</p>
+              </div>
+            </div>
+
+            <div className="relative mt-12">
+              <h2 className="text-3xl font-extrabold leading-tight text-white">
+                Attendance that<br />can&apos;t be faked.
+              </h2>
+              <p className="mt-3 max-w-sm text-sm leading-relaxed text-white/75">
+                PIN, GPS and server-side verification work together so every record is real, fair and tamper-proof.
+              </p>
+            </div>
+
+            <MotionUl
+              variants={staggerChildren}
+              initial="hidden"
+              animate="show"
+              className="relative mt-10 space-y-4"
             >
-              Sign In
-            </button>
-            <button
-              type="button"
-              className={mode === 'signup' ? 'active' : ''}
-              onClick={() => { setMode('signup'); setError(''); setStatus(''); }}
-            >
-              Sign Up
-            </button>
+              {FEATURES.map((feature) => {
+                const Icon = feature.icon;
+                return (
+                  <MotionLi key={feature.title} variants={listItem} className="flex items-start gap-3">
+                    <span className="mt-0.5 grid size-10 shrink-0 place-items-center rounded-xl bg-white/15 text-white backdrop-blur">
+                      <Icon size={18} />
+                    </span>
+                    <div>
+                      <p className="font-semibold text-white">{feature.title}</p>
+                      <p className="text-sm leading-snug text-white/70">{feature.text}</p>
+                    </div>
+                  </MotionLi>
+                );
+              })}
+            </MotionUl>
+
+            <p className="relative mt-auto pt-10 text-xs text-white/55">
+              Kwame Nkrumah University of Science &amp; Technology
+            </p>
           </div>
-        )}
 
-        {error && (
-          <div style={{
-            background: '#fee2e2',
-            color: '#dc2626',
-            padding: '10px',
-            borderRadius: '8px',
-            marginBottom: '15px',
-            fontSize: '0.85rem',
-            border: '1px solid #fecaca',
-            textAlign: 'center',
-            fontWeight: '500'
-          }}>
-            {error}
-          </div>
-        )}
+          {/* Form panel */}
+          <div className="p-6 sm:p-10">
+            <div className="mx-auto w-full max-w-sm">
+              {/* Mobile brand header */}
+              <div className="mb-6 flex items-center gap-3 lg:hidden">
+                <span className="grid size-11 place-items-center rounded-2xl bg-gradient-to-br from-brand-600 to-iris-600">
+                  <img src={KNUST_LOGO} alt="KNUST" className="size-7 object-contain" />
+                </span>
+                <div>
+                  <p className="text-base font-bold text-slate-900 leading-tight">KNUST Attendance</p>
+                  <p className="text-xs text-slate-500">Secure portal access</p>
+                </div>
+              </div>
 
-        {status && (
-          <div style={{
-            background: '#dcfce7',
-            color: '#166534',
-            padding: '10px',
-            borderRadius: '8px',
-            marginBottom: '15px',
-            fontSize: '0.85rem',
-            border: '1px solid #bbf7d0',
-            textAlign: 'center',
-            fontWeight: '500'
-          }}>
-            {status}
-          </div>
-        )}
+              <MotionDiv variants={fadeUp} initial="hidden" animate="show">
+                <h1 className="text-2xl font-extrabold tracking-tight text-slate-900 sm:text-3xl">
+                  <span className="text-gradient">{title}</span>
+                </h1>
+                <p className="mt-1.5 text-sm text-slate-500">{subtitle}</p>
+              </MotionDiv>
 
-        <form onSubmit={handleSubmit} className="login-form">
-          {isReset && (
-            <input
-              placeholder="Recovery Email"
-              required
-              type="email"
-              autoComplete="email"
-              value={data.email}
-              onChange={e => setData({...data, email: e.target.value})}
-            />
-          )}
-
-          {isSignup && (
-            <>
-              <input
-                placeholder="Full Name"
-                required
-                autoComplete="name"
-                value={data.name}
-                onChange={e => setData({...data, name: e.target.value})}
-              />
-              <input
-                placeholder="Recovery Email"
-                required
-                type="email"
-                autoComplete="email"
-                value={data.email}
-                onChange={e => setData({...data, email: e.target.value})}
-              />
-            </>
-          )}
-
-          {!isReset && (
-            <>
-              <input
-                placeholder={isSignup
-                  ? data.role === 'student' ? '8-digit Student ID' : 'Lecturer ID'
-                  : 'Email or legacy ID'}
-                required
-                type="text"
-                inputMode={isSignup && data.role === 'student' ? 'numeric' : 'text'}
-                autoComplete={isSignup ? 'username' : 'username'}
-                value={data.id}
-                onChange={e => setData({...data, id: e.target.value})}
-              />
-
-              <input
-                placeholder="Password"
-                required
-                type="password"
-                autoComplete={isSignup ? 'new-password' : 'current-password'}
-                value={data.password}
-                onChange={e => setData({...data, password: e.target.value})}
-              />
-
-              {isSignup && (
-                <input
-                  placeholder="Confirm Password"
-                  required
-                  type="password"
-                  autoComplete="new-password"
-                  value={data.confirmPassword}
-                  onChange={e => setData({...data, confirmPassword: e.target.value})}
+              {!isReset && (
+                <SegmentedToggle
+                  className="mt-6"
+                  value={mode}
+                  onChange={switchMode}
+                  options={[
+                    { value: 'signin', label: 'Sign In' },
+                    { value: 'signup', label: 'Sign Up' }
+                  ]}
                 />
               )}
 
-              <div className="role-toggle">
+              <AnimatePresence mode="wait">
+                {error && (
+                  <MotionDiv
+                    key="error"
+                    initial={{ opacity: 0, height: 0, marginTop: 0 }}
+                    animate={{ opacity: 1, height: 'auto', marginTop: 16 }}
+                    exit={{ opacity: 0, height: 0, marginTop: 0 }}
+                    className="overflow-hidden"
+                  >
+                    <div className="flex items-start gap-2.5 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-medium text-rose-600">
+                      <AlertCircle size={18} className="mt-0.5 shrink-0" />
+                      <span>{error}</span>
+                    </div>
+                  </MotionDiv>
+                )}
+                {status && (
+                  <MotionDiv
+                    key="status"
+                    initial={{ opacity: 0, height: 0, marginTop: 0 }}
+                    animate={{ opacity: 1, height: 'auto', marginTop: 16 }}
+                    exit={{ opacity: 0, height: 0, marginTop: 0 }}
+                    className="overflow-hidden"
+                  >
+                    <div className="flex items-start gap-2.5 rounded-2xl border border-grass-200 bg-grass-50 px-4 py-3 text-sm font-medium text-grass-700">
+                      <CheckCircle2 size={18} className="mt-0.5 shrink-0" />
+                      <span>{status}</span>
+                    </div>
+                  </MotionDiv>
+                )}
+              </AnimatePresence>
+
+              <form onSubmit={handleSubmit} className="mt-5 space-y-3">
+                {isReset && (
+                  <Input
+                    icon={Mail}
+                    placeholder="Recovery email"
+                    required
+                    type="email"
+                    autoComplete="email"
+                    value={data.email}
+                    onChange={(e) => setData({ ...data, email: e.target.value })}
+                  />
+                )}
+
+                {isSignup && (
+                  <>
+                    <Input
+                      icon={User}
+                      placeholder="Full name"
+                      required
+                      autoComplete="name"
+                      value={data.name}
+                      onChange={(e) => setData({ ...data, name: e.target.value })}
+                    />
+                    <Input
+                      icon={Mail}
+                      placeholder="Recovery email"
+                      required
+                      type="email"
+                      autoComplete="email"
+                      value={data.email}
+                      onChange={(e) => setData({ ...data, email: e.target.value })}
+                    />
+                  </>
+                )}
+
+                {!isReset && (
+                  <>
+                    <Input
+                      icon={IdCard}
+                      placeholder={isSignup
+                        ? data.role === 'student' ? '8-digit Student ID' : 'Lecturer ID'
+                        : 'Email or legacy ID'}
+                      required
+                      type="text"
+                      inputMode={isSignup && data.role === 'student' ? 'numeric' : 'text'}
+                      autoComplete="username"
+                      value={data.id}
+                      onChange={(e) => setData({ ...data, id: e.target.value })}
+                    />
+
+                    <PasswordField
+                      placeholder="Password"
+                      autoComplete={isSignup ? 'new-password' : 'current-password'}
+                      value={data.password}
+                      onChange={(e) => setData({ ...data, password: e.target.value })}
+                    />
+
+                    {isSignup && (
+                      <PasswordField
+                        placeholder="Confirm password"
+                        autoComplete="new-password"
+                        value={data.confirmPassword}
+                        onChange={(e) => setData({ ...data, confirmPassword: e.target.value })}
+                      />
+                    )}
+
+                    <div className="pt-1">
+                      <SegmentedToggle
+                        value={data.role}
+                        onChange={(role) => { setData({ ...data, role }); setError(''); }}
+                        options={[
+                          { value: 'student', label: 'Student', icon: <GraduationCap size={16} /> },
+                          { value: 'lecturer', label: 'Lecturer', icon: <Users size={16} /> }
+                        ]}
+                      />
+                    </div>
+                  </>
+                )}
+
+                <Button
+                  type="submit"
+                  size="lg"
+                  fullWidth
+                  isLoading={isSubmitting}
+                  className="mt-2"
+                >
+                  {isSubmitting
+                    ? 'Please wait…'
+                    : isReset ? 'Send reset link' : isSignup ? 'Create account' : 'Sign in'}
+                  {!isSubmitting && <ArrowRight size={18} />}
+                </Button>
+
                 <button
                   type="button"
-                  className={data.role === 'student' ? 'active' : ''}
-                  onClick={() => { setData({...data, role: 'student'}); setError(''); }}>
-                  Student
+                  onClick={() => switchMode(isReset ? 'signin' : 'reset')}
+                  className="mx-auto block pt-2 text-sm font-semibold text-brand-700 transition-colors hover:text-iris-600"
+                >
+                  {isReset ? 'Back to sign in' : 'Forgot password?'}
                 </button>
-                <button
-                  type="button"
-                  className={data.role === 'lecturer' ? 'active' : ''}
-                  onClick={() => { setData({...data, role: 'lecturer'}); setError(''); }}>
-                  Lecturer
-                </button>
-              </div>
-            </>
-          )}
-
-          <button
-            type="submit"
-            className="login-btn-final"
-            disabled={isSubmitting}
-            style={{
-              width: '100%',
-              padding: '14px',
-              background: '#006837',
-              color: 'white',
-              border: 'none',
-              borderRadius: '12px',
-              fontWeight: 'bold',
-              cursor: isSubmitting ? 'not-allowed' : 'pointer',
-              marginTop: '10px',
-              opacity: isSubmitting ? 0.75 : 1
-            }}
-          >
-            {isSubmitting ? 'Please Wait...' : isReset ? 'Send Reset Link' : isSignup ? 'Create Account' : 'Sign In'}
-          </button>
-
-          <button
-            type="button"
-            onClick={() => {
-              setMode(isReset ? 'signin' : 'reset');
-              setError('');
-              setStatus('');
-            }}
-            style={{background: 'none', border: 'none', color: '#003366', cursor: 'pointer', marginTop: '12px', fontWeight: 700}}
-          >
-            {isReset ? 'Back to Sign In' : 'Forgot Password?'}
-          </button>
-        </form>
+              </form>
+            </div>
+          </div>
+        </div>
       </MotionDiv>
     </div>
   );
