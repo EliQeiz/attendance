@@ -21,6 +21,7 @@
 - Lecturer-entered fallback attendance requires a reason and records the lecturer identity for later review.
 - CSV exports neutralize spreadsheet formulas to reduce CSV injection risk.
 - Roster uploads are restricted to CSV/XLSX with file size and row count limits.
+- Cloud Storage client access is denied by default because the app currently stores roster and attendance data in Firestore, not Storage.
 - Vercel response headers deny framing, reduce MIME sniffing, narrow referrer leakage, and restrict browser permissions.
 
 ## Important Limitation
