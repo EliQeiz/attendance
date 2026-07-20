@@ -896,6 +896,95 @@ button {
   box-shadow: 0 12px 28px rgba(53, 229, 159, 0.14);
 }
 
+.admin-danger-btn {
+  min-height: 42px;
+}
+
+.full-width-action {
+  width: 100%;
+}
+
+.admin-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(260px, 0.65fr);
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.admin-panel {
+  margin-bottom: 0;
+}
+
+.admin-action-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.danger-panel {
+  border-color: rgba(255, 79, 122, 0.28) !important;
+}
+
+.danger-icon {
+  color: var(--aura-danger);
+  border-color: rgba(255, 79, 122, 0.28);
+  background: rgba(255, 79, 122, 0.1);
+}
+
+.admin-search {
+  width: min(100%, 430px);
+}
+
+.empty-admin-state {
+  display: grid;
+  place-items: center;
+  gap: 10px;
+  padding: 44px 0;
+  color: var(--aura-muted);
+}
+
+.danger-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(0, 0, 0, 0.62);
+  backdrop-filter: blur(10px);
+}
+
+.danger-modal {
+  width: min(100%, 520px);
+  padding: 22px;
+  border: 1px solid rgba(255, 79, 122, 0.34);
+  border-radius: 8px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.095), rgba(255, 255, 255, 0.04)),
+    rgba(9, 11, 31, 0.94);
+  box-shadow: 0 28px 90px rgba(0, 0, 0, 0.5);
+}
+
+.danger-confirm-label {
+  display: block;
+  margin: 12px 0 8px;
+  color: var(--aura-muted);
+  font-size: 0.86rem;
+  font-weight: 800;
+}
+
+.danger-confirm-label strong {
+  color: var(--aura-text);
+}
+
+.danger-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 16px;
+}
+
 .back-btn {
   border: 0;
   background: transparent;
@@ -1103,6 +1192,93 @@ button {
   font-size: 0.84rem;
 }
 
+.token-value {
+  font-size: clamp(1.05rem, 3vw, 1.35rem) !important;
+  letter-spacing: 0.08em;
+}
+
+.readiness-grid .metric-card {
+  min-height: 92px;
+}
+
+.ledger-header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.student-ledger-toolbar {
+  display: grid;
+  gap: 10px;
+  margin: 14px 0;
+}
+
+.student-ledger-toolbar .search-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+}
+
+.ledger-filter {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+  color: var(--aura-muted);
+}
+
+.ledger-filter button {
+  min-height: 32px;
+  padding: 6px 10px;
+  border: 1px solid rgba(164, 178, 255, 0.16);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.055);
+  color: var(--aura-muted);
+  cursor: pointer;
+  font-size: 0.76rem;
+  font-weight: 850;
+  text-transform: capitalize;
+}
+
+.ledger-filter button.active {
+  color: var(--aura-text);
+  border-color: rgba(25, 200, 255, 0.38);
+  background: rgba(25, 200, 255, 0.12);
+}
+
+.course-passport-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.course-passport-card {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid rgba(164, 178, 255, 0.14);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.055);
+}
+
+.course-passport-card strong {
+  color: var(--aura-text);
+}
+
+.course-passport-card p {
+  margin-top: 3px;
+}
+
+.passport-metrics {
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
 .history-list {
   display: grid;
   gap: 8px;
@@ -1134,6 +1310,10 @@ button {
 
   .qr-session-grid {
     grid-template-columns: 1fr !important;
+  }
+
+  .admin-grid {
+    grid-template-columns: 1fr;
   }
 }
 
@@ -1232,9 +1412,24 @@ button {
   .manual-student-form,
   .student-action-grid,
   .student-status-grid,
+  .admin-action-grid,
   .auth-mode-toggle,
   .role-toggle {
     grid-template-columns: 1fr !important;
+  }
+
+  .ledger-header-actions,
+  .danger-modal-actions,
+  .course-passport-card {
+    width: 100%;
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .ledger-header-actions > *,
+  .danger-modal-actions > *,
+  .admin-search {
+    width: 100% !important;
   }
 
   .welcome-banner h2 {

@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
-import { AlertCircle, CheckCircle, Clock, LogOut, MapPin, QrCode, RefreshCw, ShieldCheck } from 'lucide-react';
+import { AlertCircle, Award, CheckCircle, Clock, Download, Filter, LogOut, MapPin, QrCode, RefreshCw, Search, ShieldCheck, Smartphone } from 'lucide-react';
 import { db, functions } from '../firebase';
 import {
   collection,
@@ -87,6 +87,12 @@ const getStatusIcon = (status = 'Verified') => {
   return <AlertCircle size={16} />;
 };
 
+const protectCsvCell = (value = '') => {
+  const text = value == null ? '' : String(value);
+  const safeText = /^[=+\-@\t\r]/.test(text) ? `'${text}` : text;
+  return `"${safeText.replace(/"/g, '""')}"`;
+};
+
 export default function StudentDashboard({ user, onLogout }) {
   const [activeSessions, setActiveSessions] = useState([]);
   const [status, setStatus] = useState('');
@@ -100,7 +106,10 @@ export default function StudentDashboard({ user, onLogout }) {
   const [studentHistory, setStudentHistory] = useState([]);
   const [studentSummary, setStudentSummary] = useState({ verified: 0, pending: 0, denied: 0, total: 0, courses: [] });
   const [isHistoryLoading, setIsHistoryLoading] = useState(false);
+  const [historySearchTerm, setHistorySearchTerm] = useState('');
+  const [historyStatusFilter, setHistoryStatusFilter] = useState('all');
   const studentId = user.knust_id || user.id;
+  const deviceKeyPreview = useMemo(() => getBrowserDeviceKey().slice(-8).toUpperCase(), []);
 
   const loadStudentHistory = useCallback(async () => {
     setIsHistoryLoading(true);
@@ -161,6 +170,49 @@ export default function StudentDashboard({ user, onLogout }) {
 
     return '';
   }, [activeSessions, scannedSession]);
+
+  const filteredStudentHistory = useMemo(() => {
+    const term = historySearchTerm.trim().toLowerCase();
+
+    return studentHistory.filter(record => {
+      const matchesStatus = historyStatusFilter === 'all'
+        || (record.status || 'Verified').toLowerCase() === historyStatusFilter;
+      const matchesTerm = !term
+        || (record.courseCode || '').toLowerCase().includes(term)
+        || String(record.week || '').toLowerCase().includes(term)
+        || (record.status || '').toLowerCase().includes(term)
+        || (record.method || '').toLowerCase().includes(term);
+
+      return matchesStatus && matchesTerm;
+    });
+  }, [historySearchTerm, historyStatusFilter, studentHistory]);
+
+  const downloadStudentLedger = () => {
+    if (!studentHistory.length) {
+      setError('No attendance records are available to export yet.');
+      return;
+    }
+
+    const fields = ['Course', 'Week', 'Status', 'Method', 'Date', 'DistanceMeters'];
+    const rows = studentHistory.map(record => ([
+      record.courseCode || '',
+      record.week ? `Week ${record.week}` : '',
+      record.status || 'Verified',
+      formatMethodLabel(record.method),
+      record.dateTime || record.timeVerified || record.verificationDate || '',
+      Number.isFinite(record.distanceMeters) ? record.distanceMeters : ''
+    ]));
+    const csv = [fields, ...rows]
+      .map(row => row.map(protectCsvCell).join(','))
+      .join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+    const anchor = document.createElement('a');
+    const url = window.URL.createObjectURL(blob);
+    anchor.href = url;
+    anchor.download = `${studentId}_attendance_ledger.csv`;
+    anchor.click();
+    window.URL.revokeObjectURL(url);
+  };
 
   const openScanner = (mode) => {
     setScannerMode(mode);
@@ -280,6 +332,27 @@ export default function StudentDashboard({ user, onLogout }) {
           </p>
         </section>
 
+        <section className="suite-panel">
+          <div className="suite-panel-header">
+            <div className="suite-icon"><Smartphone size={20} /></div>
+            <div>
+              <h3>Verification Readiness</h3>
+              <p>Device token, browser GPS support, and active session availability for this account.</p>
+            </div>
+          </div>
+
+          <div className="student-status-grid readiness-grid">
+            <div className="metric-card info">
+              <p className="metric-label">Device Token</p>
+              <strong className="metric-value token-value">{deviceKeyPreview}</strong>
+            </div>
+            <div className={`metric-card ${navigator.geolocation ? 'success' : 'warning'}`}>
+              <p className="metric-label">GPS Support</p>
+              <strong className="metric-value">{navigator.geolocation ? 'Ready' : 'Blocked'}</strong>
+            </div>
+          </div>
+        </section>
+
         {latestCourseLabel && (
           <div className="notice-card info">
             <MapPin size={16} />
@@ -347,6 +420,34 @@ export default function StudentDashboard({ user, onLogout }) {
           </section>
         )}
 
+        {studentSummary.courses?.length > 0 && (
+          <section className="suite-panel">
+            <div className="suite-panel-header">
+              <div className="suite-icon"><Award size={20} /></div>
+              <div>
+                <h3>Course Passport</h3>
+                <p>Attendance health by course, including pending and denied scans.</p>
+              </div>
+            </div>
+
+            <div className="course-passport-grid">
+              {studentSummary.courses.map(course => (
+                <div key={course.courseCode} className="course-passport-card">
+                  <div>
+                    <strong>{course.courseCode}</strong>
+                    <p>{course.sessions?.join(', ') || 'No verified sessions yet'}</p>
+                  </div>
+                  <div className="passport-metrics">
+                    <span className="status-pill verified">{course.verified || 0} Verified</span>
+                    {(course.pending || 0) > 0 && <span className="status-pill pending">{course.pending} Pending</span>}
+                    {(course.denied || 0) > 0 && <span className="status-pill denied">{course.denied} Denied</span>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
         <section className="suite-panel">
           <div className="suite-panel-header">
             <div className="suite-icon"><Clock size={20} /></div>
@@ -354,16 +455,27 @@ export default function StudentDashboard({ user, onLogout }) {
               <h3>My Attendance Ledger</h3>
               <p>Your recorded sessions across courses.</p>
             </div>
-            <button
-              type="button"
-              onClick={loadStudentHistory}
-              disabled={isHistoryLoading}
-              className="mini-action-btn present"
-              aria-label="Refresh attendance ledger"
-            >
-              <RefreshCw size={15} />
-              {isHistoryLoading ? 'Refreshing' : 'Refresh'}
-            </button>
+            <div className="ledger-header-actions">
+              <button
+                type="button"
+                onClick={loadStudentHistory}
+                disabled={isHistoryLoading}
+                className="mini-action-btn present"
+                aria-label="Refresh attendance ledger"
+              >
+                <RefreshCw size={15} />
+                {isHistoryLoading ? 'Refreshing' : 'Refresh'}
+              </button>
+              <button
+                type="button"
+                onClick={downloadStudentLedger}
+                className="mini-action-btn present"
+                aria-label="Download attendance ledger"
+              >
+                <Download size={15} />
+                Export
+              </button>
+            </div>
           </div>
 
           <div className="student-status-grid">
@@ -375,10 +487,42 @@ export default function StudentDashboard({ user, onLogout }) {
               <p className="metric-label">Pending</p>
               <strong className="metric-value">{studentSummary.pending || 0}</strong>
             </div>
+            <div className="metric-card">
+              <p className="metric-label">Denied</p>
+              <strong className="metric-value">{studentSummary.denied || 0}</strong>
+            </div>
+            <div className="metric-card info">
+              <p className="metric-label">Total Records</p>
+              <strong className="metric-value">{studentSummary.total || 0}</strong>
+            </div>
+          </div>
+
+          <div className="student-ledger-toolbar">
+            <div className="search-bar">
+              <Search size={16} />
+              <input
+                placeholder="Search course, week, method, or status"
+                value={historySearchTerm}
+                onChange={(event) => setHistorySearchTerm(event.target.value)}
+              />
+            </div>
+            <div className="ledger-filter">
+              <Filter size={15} />
+              {['all', 'verified', 'pending', 'denied'].map(filter => (
+                <button
+                  key={filter}
+                  type="button"
+                  className={historyStatusFilter === filter ? 'active' : ''}
+                  onClick={() => setHistoryStatusFilter(filter)}
+                >
+                  {filter}
+                </button>
+              ))}
+            </div>
           </div>
 
           <div className="history-list">
-            {studentHistory.slice(0, 8).map((record, index) => (
+            {filteredStudentHistory.slice(0, 12).map((record, index) => (
               <div key={`${record.sessionKey}-${index}`} className="history-row">
                 <div>
                   <strong>{record.courseCode || 'Course'} {record.week ? `Week ${record.week}` : ''}</strong>
@@ -389,7 +533,7 @@ export default function StudentDashboard({ user, onLogout }) {
                 </span>
               </div>
             ))}
-            {!isHistoryLoading && studentHistory.length === 0 && (
+            {!isHistoryLoading && filteredStudentHistory.length === 0 && (
               <p className="empty-state">No attendance records yet.</p>
             )}
           </div>

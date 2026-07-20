@@ -27,7 +27,14 @@ import {
   SortAsc,
   SortDesc,
   CalendarDays,
-  ClipboardList
+  ClipboardList,
+  Trash2,
+  Settings2,
+  ShieldAlert,
+  RotateCcw,
+  UserX,
+  DatabaseZap,
+  FileDown
 } from 'lucide-react';
 import { Parser } from '@json2csv/plainjs';
 import { db } from '../firebase';
@@ -374,10 +381,40 @@ const formatMethodLabel = (method = '') => ({
   QR_FALLBACK: 'Legacy Student QR'
 }[method] || method || 'QR Attendance');
 
+const deleteSnapshotDocs = async (snapshot) => {
+  let batch = writeBatch(db);
+  let operationCount = 0;
+
+  const commitBatch = async () => {
+    if (!operationCount) return;
+    await batch.commit();
+    batch = writeBatch(db);
+    operationCount = 0;
+  };
+
+  for (const documentSnapshot of snapshot.docs) {
+    batch.delete(documentSnapshot.ref);
+    operationCount += 1;
+
+    if (operationCount >= 450) {
+      await commitBatch();
+    }
+  }
+
+  await commitBatch();
+  return snapshot.size;
+};
+
+const deleteCollectionDocuments = async (collectionReference) => {
+  const snapshot = await getDocs(collectionReference);
+  return deleteSnapshotDocs(snapshot);
+};
+
 export default function LecturerDashboard({ user, onLogout }) {
   const [courses, setCourses] = useState([]);
   const [attendance, setAttendance] = useState({});
   const [activeCourse, setActiveCourse] = useState(null);
+  const [courseRoster, setCourseRoster] = useState([]);
   const [currentWeek, setCurrentWeek] = useState(1);
   const [activeSession, setActiveSession] = useState(null);
   const [sessionSecret, setSessionSecret] = useState(null);
@@ -406,6 +443,11 @@ export default function LecturerDashboard({ user, onLogout }) {
   const [editSearchTerm, setEditSearchTerm] = useState('');
   const [correctionStatus, setCorrectionStatus] = useState('');
   const [isCorrectionSaving, setIsCorrectionSaving] = useState(false);
+  const [adminSearchTerm, setAdminSearchTerm] = useState('');
+  const [adminStatus, setAdminStatus] = useState('');
+  const [isAdminBusy, setIsAdminBusy] = useState(false);
+  const [dangerAction, setDangerAction] = useState(null);
+  const [dangerConfirmValue, setDangerConfirmValue] = useState('');
   const [searchTerm, setSearchTerm] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [darkMode, setDarkMode] = useState(false);
@@ -421,6 +463,28 @@ export default function LecturerDashboard({ user, onLogout }) {
 
     return () => unsubscribe();
   }, [user.id]);
+
+  useEffect(() => {
+    if (!activeCourse?.id) {
+      setCourseRoster([]);
+      return;
+    }
+
+    const unsubscribe = onSnapshot(collection(db, "courses", activeCourse.id, "students"), (snapshot) => {
+      const rosterRows = snapshot.docs.map(studentDoc => ({
+        uid: studentDoc.id,
+        ...studentDoc.data()
+      }));
+
+      setCourseRoster(sortByStudentId(rosterRows, 'asc'));
+      setActiveCourse(prev => prev?.id === activeCourse.id
+        ? { ...prev, rosterCount: snapshot.size }
+        : prev
+      );
+    });
+
+    return () => unsubscribe();
+  }, [activeCourse?.id]);
 
   useEffect(() => {
     if (!activeCourse) return;
@@ -1009,6 +1073,249 @@ export default function LecturerDashboard({ user, onLogout }) {
     }
   };
 
+  const clearSessionArtifacts = async (weekNumber, resetReason = 'lecturer-reset') => {
+    if (!activeCourse) return { skipped: true, records: 0, devices: 0 };
+
+    const sessionKey = getSessionKey(activeCourse.code, weekNumber);
+    const sessionRef = doc(db, "attendance", sessionKey);
+    const sessionSnapshot = await getDoc(sessionRef);
+
+    if (!sessionSnapshot.exists()) {
+      return { skipped: true, sessionKey, records: 0, devices: 0 };
+    }
+
+    const deletedRecords = await deleteCollectionDocuments(collection(db, "attendance", sessionKey, "records"));
+    const deletedDevices = await deleteCollectionDocuments(collection(db, "attendance", sessionKey, "devices"));
+    await deleteCollectionDocuments(collection(db, "attendance", sessionKey, "secure"));
+
+    await setDoc(sessionRef, {
+      active: false,
+      totalVerified: 0,
+      pendingCount: 0,
+      deniedCount: 0,
+      absentCount: 0,
+      absentStudents: [],
+      cleared: true,
+      resetReason,
+      resetAt: serverTimestamp(),
+      resetBy: user.id,
+      resetByName: user.name,
+      lastEditedAt: serverTimestamp(),
+      lastEditedBy: user.id
+    }, { merge: true });
+
+    await addDoc(collection(db, "attendance", sessionKey, "audit"), {
+      action: resetReason,
+      deletedRecords,
+      deletedDevices,
+      courseCode: normalizeCourseCode(activeCourse.code),
+      weekNumber,
+      editedBy: user.id,
+      editedByName: user.name,
+      editedAt: serverTimestamp()
+    });
+
+    setAttendance(prev => ({
+      ...prev,
+      [sessionKey]: []
+    }));
+
+    return { skipped: false, sessionKey, records: deletedRecords, devices: deletedDevices };
+  };
+
+  const deleteAttendanceRecord = async (record, weekNumber = currentWeek) => {
+    if (!activeCourse || !record?.studentID) return;
+
+    const sessionKey = getSessionKey(activeCourse.code, weekNumber);
+    await deleteDoc(doc(db, "attendance", sessionKey, "records", record.studentID));
+
+    if (record.deviceKey) {
+      await deleteDoc(doc(db, "attendance", sessionKey, "devices", record.deviceKey)).catch(() => {});
+    }
+
+    await recordCorrectionAudit({
+      weekNumber,
+      studentID: record.studentID,
+      fullName: record.fullName || `Student ${record.studentID}`,
+      action: 'deleted-attendance-record'
+    });
+    await updateSessionAbsentees(weekNumber);
+
+    setAttendance(prev => ({
+      ...prev,
+      [sessionKey]: (prev[sessionKey] || []).filter(row => row.studentID !== record.studentID)
+    }));
+
+    if (view === 'history' || view === 'admin') {
+      await loadCourseHistory();
+    }
+
+    setAdminStatus(`${record.fullName || record.studentID} was removed from Week ${weekNumber}.`);
+  };
+
+  const removeRosterStudent = async (student) => {
+    if (!activeCourse || !student?.studentID) return;
+
+    await deleteDoc(doc(db, "courses", activeCourse.id, "students", student.studentID));
+    const rosterSnapshot = await getDocs(collection(db, "courses", activeCourse.id, "students"));
+    await setDoc(doc(db, "courses", activeCourse.id), {
+      rosterCount: rosterSnapshot.size,
+      rosterUpdatedAt: serverTimestamp(),
+      lastEditedAt: serverTimestamp(),
+      lastEditedBy: user.id
+    }, { merge: true });
+
+    setAdminStatus(`${student.fullName || student.name || student.studentID} was removed from the course roster.`);
+  };
+
+  const clearCurrentWeekHistory = async () => {
+    const result = await clearSessionArtifacts(currentWeek, 'cleared-current-week-history');
+    await loadCourseHistory();
+    setAdminStatus(result.skipped
+      ? `Week ${currentWeek} had no session data to clear.`
+      : `Week ${currentWeek} reset complete. Deleted ${result.records} attendance record${result.records === 1 ? '' : 's'}.`
+    );
+  };
+
+  const clearSemesterHistory = async () => {
+    let deletedRecords = 0;
+    let touchedWeeks = 0;
+
+    for (const weekNumber of WEEKS) {
+      const result = await clearSessionArtifacts(weekNumber, 'cleared-semester-history');
+      if (!result.skipped) touchedWeeks += 1;
+      deletedRecords += result.records || 0;
+    }
+
+    await loadCourseHistory();
+    setAdminStatus(`Semester reset complete. ${touchedWeeks} week${touchedWeeks === 1 ? '' : 's'} touched, ${deletedRecords} record${deletedRecords === 1 ? '' : 's'} deleted.`);
+  };
+
+  const deleteCourseWorkspace = async () => {
+    if (!activeCourse) return;
+
+    const courseLabel = activeCourse.code;
+    let deletedRecords = 0;
+
+    for (const weekNumber of WEEKS) {
+      const result = await clearSessionArtifacts(weekNumber, 'course-workspace-deleted');
+      deletedRecords += result.records || 0;
+    }
+
+    const deletedStudents = await deleteCollectionDocuments(collection(db, "courses", activeCourse.id, "students"));
+    await deleteDoc(doc(db, "courses", activeCourse.id));
+
+    setActiveCourse(null);
+    setCourseRoster([]);
+    setHistoryRows([]);
+    setHistorySummary([]);
+    setView('hub');
+    setAdminStatus(`${courseLabel} deleted. Removed ${deletedStudents} roster student${deletedStudents === 1 ? '' : 's'} and ${deletedRecords} attendance record${deletedRecords === 1 ? '' : 's'}.`);
+  };
+
+  const getDangerActionConfig = (action = dangerAction) => {
+    if (!action || !activeCourse) return null;
+
+    if (action.type === 'delete-record') {
+      return {
+        title: 'Delete Attendance Record',
+        tone: 'danger',
+        confirmText: action.record?.studentID || '',
+        description: `Remove ${action.record?.fullName || action.record?.studentID || 'this student'} from Week ${action.weekNumber}. This makes the student absent for that session unless corrected again.`,
+        buttonLabel: 'Delete Record'
+      };
+    }
+
+    if (action.type === 'remove-roster-student') {
+      return {
+        title: 'Remove Roster Student',
+        tone: 'danger',
+        confirmText: action.student?.studentID || '',
+        description: `Remove ${action.student?.fullName || action.student?.name || action.student?.studentID || 'this student'} from ${activeCourse.code}. Existing attendance history will remain unless separately deleted.`,
+        buttonLabel: 'Remove Student'
+      };
+    }
+
+    if (action.type === 'clear-week') {
+      return {
+        title: 'Reset Current Week',
+        tone: 'danger',
+        confirmText: getSessionKey(activeCourse.code, currentWeek),
+        description: `Delete all attendance records and device locks for ${activeCourse.code} Week ${currentWeek}. Audit notes remain protected.`,
+        buttonLabel: 'Reset Week'
+      };
+    }
+
+    if (action.type === 'clear-semester') {
+      return {
+        title: 'Reset Semester History',
+        tone: 'danger',
+        confirmText: normalizeCourseCode(activeCourse.code),
+        description: `Delete attendance records across all ${WEEKS.length} weeks for ${activeCourse.code}. Course and roster remain intact.`,
+        buttonLabel: 'Reset Semester'
+      };
+    }
+
+    if (action.type === 'delete-course') {
+      return {
+        title: 'Delete Course Workspace',
+        tone: 'critical',
+        confirmText: `DELETE ${normalizeCourseCode(activeCourse.code)}`,
+        description: `Delete ${activeCourse.code}, its roster, and all lecturer-editable attendance records. Attendance session shells are reset for audit safety.`,
+        buttonLabel: 'Delete Course'
+      };
+    }
+
+    return null;
+  };
+
+  const openDangerAction = (action) => {
+    setDangerAction(action);
+    setDangerConfirmValue('');
+    setAdminStatus('');
+  };
+
+  const closeDangerAction = () => {
+    if (isAdminBusy) return;
+    setDangerAction(null);
+    setDangerConfirmValue('');
+  };
+
+  const executeDangerAction = async () => {
+    const config = getDangerActionConfig();
+    if (!dangerAction || !config) return;
+
+    if (dangerConfirmValue.trim() !== config.confirmText) {
+      setAdminStatus(`Type "${config.confirmText}" exactly to confirm.`);
+      return;
+    }
+
+    setIsAdminBusy(true);
+    setAdminStatus('Processing protected operation...');
+
+    try {
+      if (dangerAction.type === 'delete-record') {
+        await deleteAttendanceRecord(dangerAction.record, dangerAction.weekNumber);
+      } else if (dangerAction.type === 'remove-roster-student') {
+        await removeRosterStudent(dangerAction.student);
+      } else if (dangerAction.type === 'clear-week') {
+        await clearCurrentWeekHistory();
+      } else if (dangerAction.type === 'clear-semester') {
+        await clearSemesterHistory();
+      } else if (dangerAction.type === 'delete-course') {
+        await deleteCourseWorkspace();
+      }
+
+      setDangerAction(null);
+      setDangerConfirmValue('');
+    } catch (error) {
+      console.error('Protected admin operation failed:', error);
+      setAdminStatus(error?.message || 'Unable to complete the protected operation.');
+    } finally {
+      setIsAdminBusy(false);
+    }
+  };
+
   const startQrSession = async () => {
     if (!activeCourse) return;
 
@@ -1376,7 +1683,7 @@ export default function LecturerDashboard({ user, onLogout }) {
   }, [activeCourse, getRegisteredStudentsForCourse]);
 
   useEffect(() => {
-    if (view === 'history' && activeCourse) {
+    if ((view === 'history' || view === 'admin') && activeCourse) {
       loadCourseHistory();
     }
   }, [view, activeCourse, loadCourseHistory]);
@@ -1471,6 +1778,20 @@ export default function LecturerDashboard({ user, onLogout }) {
   const historyAttendanceRate = historySummary.length
     ? Math.round((verifiedHistoryRows.length / (historySummary.length * WEEKS.length)) * 100)
     : 0;
+  const filteredCourseRoster = useMemo(() => {
+    const term = adminSearchTerm.trim().toLowerCase();
+    return courseRoster.filter(student => (
+      !term ||
+      (student.studentID || '').toLowerCase().includes(term) ||
+      (student.indexNumber || '').toLowerCase().includes(term) ||
+      (student.referenceNumber || '').toLowerCase().includes(term) ||
+      (student.fullName || student.name || '').toLowerCase().includes(term)
+    ));
+  }, [adminSearchTerm, courseRoster]);
+  const recordedWeeksCount = useMemo(() => (
+    WEEKS.filter(week => (attendance[getSessionKey(activeCourse?.code || '', week)] || []).length > 0).length
+  ), [activeCourse?.code, attendance]);
+  const adminDangerConfig = getDangerActionConfig();
 
   return (
     <MotionDiv
@@ -1498,6 +1819,14 @@ export default function LecturerDashboard({ user, onLogout }) {
               style={{ opacity: activeCourse ? 1 : 0.4 }}
             >
               <History size={20} /> Attendance History
+            </button>
+            <button
+              onClick={() => { if(activeCourse) setView('admin'); setSidebarOpen(false); }}
+              className={`nav-item ${view === 'admin' ? 'active-nav' : ''}`}
+              disabled={!activeCourse}
+              style={{ opacity: activeCourse ? 1 : 0.4 }}
+            >
+              <Settings2 size={20} /> Operations Center
             </button>
           </div>
 
@@ -1798,7 +2127,7 @@ export default function LecturerDashboard({ user, onLogout }) {
                 </span>
               </div>
               <table className="pro-table">
-                <thead><tr><th>Student Details</th><th>Index / Ref</th><th>Check-in Time</th><th>Method</th><th>Verification</th></tr></thead>
+                <thead><tr><th>Student Details</th><th>Index / Ref</th><th>Check-in Time</th><th>Method</th><th>Verification</th><th>Actions</th></tr></thead>
                 <tbody>
                   {sortedCurrentRecords
                     .filter(s => (
@@ -1818,6 +2147,15 @@ export default function LecturerDashboard({ user, onLogout }) {
                             {s.status === 'Verified' ? <CheckCircle size={12}/> : <AlertCircle size={12}/>}
                             {s.status || 'Verified'}
                           </span>
+                        </td>
+                        <td>
+                          <button
+                            type="button"
+                            className="mini-action-btn absent"
+                            onClick={() => openDangerAction({ type: 'delete-record', record: s, weekNumber: currentWeek })}
+                          >
+                            <Trash2 size={13} /> Delete
+                          </button>
                         </td>
                       </tr>
                     ))}
@@ -1968,7 +2306,7 @@ export default function LecturerDashboard({ user, onLogout }) {
                 <span style={{fontSize: '0.8rem', color: 'var(--knust-green)', fontWeight: '700'}}>{filteredHistoryRows.length} Records</span>
               </div>
               <table className="pro-table">
-                <thead><tr><th>Student</th><th>Index / Ref</th><th>Session</th><th>Date</th><th>Method</th><th>Status</th></tr></thead>
+                <thead><tr><th>Student</th><th>Index / Ref</th><th>Session</th><th>Date</th><th>Method</th><th>Status</th><th>Actions</th></tr></thead>
                 <tbody>
                   {filteredHistoryRows.map((s, idx) => (
                     <tr key={`${s.sessionKey}-${s.studentID}-${idx}`}>
@@ -1978,6 +2316,15 @@ export default function LecturerDashboard({ user, onLogout }) {
                       <td>{s.dateTime || s.timeVerified || s.sessionDate}</td>
                       <td>{formatMethodLabel(s.method)}</td>
                       <td><span className={getStatusClassName(s.status)}>{s.status || 'Verified'}</span></td>
+                      <td>
+                        <button
+                          type="button"
+                          className="mini-action-btn absent"
+                          onClick={() => openDangerAction({ type: 'delete-record', record: s, weekNumber: s.week || currentWeek })}
+                        >
+                          <Trash2 size={13} /> Delete
+                        </button>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -1988,6 +2335,156 @@ export default function LecturerDashboard({ user, onLogout }) {
                   <h3>No matching attendance records found.</h3>
                 </div>
               )}
+            </div>
+          </div>
+        )}
+
+        {view === 'admin' && activeCourse && (
+          <div className="admin-view fade-in">
+            <div className="history-header" style={{marginBottom: '30px'}}>
+              <button onClick={() => setView('session')} className="back-btn" style={{marginBottom: '20px'}}><ArrowLeft size={18}/> Back to Active Session</button>
+              <h2 style={{fontSize: '2rem', color: 'var(--knust-blue)', fontWeight: '900'}}>Operations Center: {activeCourse.code}</h2>
+              <p style={{color: 'var(--text-muted)'}}>Protected course controls, roster administration, reset tools, and export operations.</p>
+            </div>
+
+            {adminStatus && (
+              <div className={`notice-card ${adminStatus.includes('Unable') || adminStatus.includes('Type "') ? 'error' : 'info'}`}>
+                {adminStatus.includes('Unable') || adminStatus.includes('Type "') ? <AlertCircle size={16} /> : <ShieldAlert size={16} />}
+                <span>{adminStatus}</span>
+              </div>
+            )}
+
+            <div className="stats-grid">
+              <div className="stat-card"><h3>Roster Size</h3><p>{courseRoster.length}</p></div>
+              <div className="stat-card"><h3>Recorded Weeks</h3><p>{recordedWeeksCount}</p></div>
+              <div className="stat-card"><h3>Verified Records</h3><p>{verifiedHistoryRows.length}</p></div>
+              <div className="stat-card"><h3>Pending Queue</h3><p>{historyRows.filter(row => row.status === 'Pending').length}</p></div>
+            </div>
+
+            <div className="admin-grid">
+              <section className="table-card admin-panel">
+                <div className="suite-panel-header">
+                  <div className="suite-icon"><DatabaseZap size={20} /></div>
+                  <div>
+                    <h3>Course Data Operations</h3>
+                    <p>Refresh analytics, export the current week, or reset attendance data with typed confirmation.</p>
+                  </div>
+                </div>
+
+                <div className="admin-action-grid">
+                  <button type="button" className="btn-download" onClick={loadCourseHistory} disabled={isHistoryLoading || isAdminBusy}>
+                    <RotateCcw size={16} /> {isHistoryLoading ? 'Refreshing...' : 'Refresh Ledger'}
+                  </button>
+                  <button type="button" className="btn-download" onClick={() => downloadCSV(currentWeek)} disabled={isAdminBusy}>
+                    <FileDown size={16} /> Export Week {currentWeek}
+                  </button>
+                  <button type="button" className="mini-action-btn absent admin-danger-btn" onClick={() => openDangerAction({ type: 'clear-week' })} disabled={isAdminBusy}>
+                    <Trash2 size={16} /> Reset Week {currentWeek}
+                  </button>
+                  <button type="button" className="mini-action-btn absent admin-danger-btn" onClick={() => openDangerAction({ type: 'clear-semester' })} disabled={isAdminBusy}>
+                    <ShieldAlert size={16} /> Reset Semester
+                  </button>
+                </div>
+              </section>
+
+              <section className="table-card admin-panel danger-panel">
+                <div className="suite-panel-header">
+                  <div className="suite-icon danger-icon"><ShieldAlert size={20} /></div>
+                  <div>
+                    <h3>Danger Zone</h3>
+                    <p>Course deletion removes the roster and all editable attendance records for this course workspace.</p>
+                  </div>
+                </div>
+
+                <button type="button" className="mini-action-btn absent admin-danger-btn full-width-action" onClick={() => openDangerAction({ type: 'delete-course' })} disabled={isAdminBusy}>
+                  <Trash2 size={16} /> Delete Course Workspace
+                </button>
+              </section>
+            </div>
+
+            <section className="table-card table-wrapper">
+              <div style={{padding: '20px', borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap'}}>
+                <div>
+                  <h3 style={{fontSize: '1rem'}}>Roster Directory</h3>
+                  <p style={{fontSize: '0.82rem', color: 'var(--text-muted)', marginTop: '4px'}}>Search and remove students from this course roster.</p>
+                </div>
+                <div className="search-bar admin-search">
+                  <Search size={18} color="#94a3b8" />
+                  <input
+                    placeholder="Search roster by name, ID, index, or reference"
+                    value={adminSearchTerm}
+                    onChange={(event) => setAdminSearchTerm(event.target.value)}
+                    style={{border: 'none', outline: 'none', background: 'transparent', width: '100%', padding: '14px', color: 'var(--text-main)'}}
+                  />
+                </div>
+              </div>
+
+              <table className="pro-table">
+                <thead><tr><th>Student</th><th>Index / Ref</th><th>Device Profile</th><th>Source</th><th>Actions</th></tr></thead>
+                <tbody>
+                  {filteredCourseRoster.map(student => (
+                    <tr key={`roster-${student.studentID}`}>
+                      <td><div className="student-cell"><span className="s-id">{student.studentID}</span><span className="s-name">{student.fullName || student.name}</span></div></td>
+                      <td><div className="student-cell"><span className="s-id">{student.indexNumber || 'N/A'}</span><span className="s-name">{student.referenceNumber || 'No ref'}</span></div></td>
+                      <td>{student.deviceName || getStudentDeviceName(student.studentID)}</td>
+                      <td><span className={`status-pill ${student.manuallyAdded ? 'pending' : 'verified'}`}>{student.manuallyAdded ? 'Manual' : 'Imported'}</span></td>
+                      <td>
+                        <button
+                          type="button"
+                          className="mini-action-btn absent"
+                          disabled={isAdminBusy}
+                          onClick={() => openDangerAction({ type: 'remove-roster-student', student })}
+                        >
+                          <UserX size={13} /> Remove
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {filteredCourseRoster.length === 0 && (
+                <div className="empty-admin-state">
+                  <Users size={42} />
+                  <h3>No roster students found.</h3>
+                </div>
+              )}
+            </section>
+          </div>
+        )}
+
+        {adminDangerConfig && (
+          <div className="danger-modal-backdrop" role="presentation">
+            <div className="danger-modal" role="dialog" aria-modal="true" aria-labelledby="danger-modal-title">
+              <div className="suite-panel-header">
+                <div className={`suite-icon ${adminDangerConfig.tone === 'critical' ? 'danger-icon' : ''}`}><ShieldAlert size={20} /></div>
+                <div>
+                  <h3 id="danger-modal-title">{adminDangerConfig.title}</h3>
+                  <p>{adminDangerConfig.description}</p>
+                </div>
+              </div>
+
+              <label className="danger-confirm-label" htmlFor="danger-confirm-input">
+                Type <strong>{adminDangerConfig.confirmText}</strong> to continue.
+              </label>
+              <input
+                id="danger-confirm-input"
+                className="pro-input"
+                value={dangerConfirmValue}
+                onChange={(event) => setDangerConfirmValue(event.target.value)}
+                autoFocus
+              />
+
+              <div className="danger-modal-actions">
+                <button type="button" className="text-button" onClick={closeDangerAction} disabled={isAdminBusy}>Cancel</button>
+                <button
+                  type="button"
+                  className="mini-action-btn absent admin-danger-btn"
+                  onClick={executeDangerAction}
+                  disabled={isAdminBusy || dangerConfirmValue.trim() !== adminDangerConfig.confirmText}
+                >
+                  <Trash2 size={15} /> {isAdminBusy ? 'Processing...' : adminDangerConfig.buttonLabel}
+                </button>
+              </div>
             </div>
           </div>
         )}
