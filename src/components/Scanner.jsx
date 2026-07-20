@@ -162,7 +162,7 @@ export default function Scanner({ onResult, onClose }) {
 
       {onClose && (
         <button onClick={onClose} style={{ marginTop: '18px', background: 'none', border: 'none', color: '#be123c', cursor: 'pointer', width: '100%', textDecoration: 'underline' }}>
-          Close QR fallback
+          Close scanner
         </button>
       )}
     </div>

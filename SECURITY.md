@@ -14,11 +14,11 @@
 - Lecturer accounts are blocked by Firestore rules unless pre-approved.
 - Attendance writes are role-gated, roster-gated, session-gated, and duplicate-protected by document ID.
 - Device reuse is tracked per session through `attendance/{sessionId}/devices/{deviceKey}`.
-- Student verification requires the active 4-digit PIN, a fresh 3-minute PIN window, refined high-accuracy GPS sampling, and a Haversine distance check within 100 meters of the lecturer GPS coordinate.
+- Student GPS verification requires the active projected lecturer QR code, a server-side session code match, refined high-accuracy GPS sampling, and a Haversine distance check within 150 meters of the lecturer GPS coordinate.
+- Scan-only QR submissions are stored as `Pending` and require lecturer approval before counting as attended.
 - New accounts use a real recovery email for Firebase Authentication. Legacy ID-based sign-in remains available for older accounts created before recovery email support.
 - New student signup atomically reserves the 8-digit Student ID, preventing two recovery emails from creating separate accounts for the same identity.
-- QR fallback codes rotate on the student dashboard and are accepted only for the matching active session within their short validity window.
-- Lecturer-entered fallback attendance requires a reason and records the lecturer identity for later review.
+- Lecturer approval actions and lecturer-entered fallback attendance require a reason or explicit decision and record the lecturer identity for later review.
 - CSV exports neutralize spreadsheet formulas to reduce CSV injection risk.
 - Roster uploads are restricted to CSV/XLSX with file size and row count limits.
 - Cloud Storage client access is denied by default because the app currently stores roster and attendance data in Firestore, not Storage.
@@ -26,4 +26,4 @@
 
 ## Important Limitation
 
-PIN + GPS and QR verification run in the browser, so a determined attacker with full browser-console control can still attempt to call Firebase directly. Firestore rules now block most unauthorized writes, but stronger proof of physical proximity would require server-side validation through Firebase Cloud Functions.
+QR scanning and GPS collection run in the browser, so a determined attacker with full browser-console control can still attempt to call Firebase directly. Firestore rules block direct student writes, and `submitAttendance` validates the QR session code, roster membership, device uniqueness, GPS proximity, and pending scan-only path server-side through Firebase Cloud Functions.

@@ -1,4 +1,5 @@
-import React, { useCallback, useMemo, useState, useEffect, lazy, Suspense } from 'react';
+import React, { useCallback, useMemo, useState, useEffect } from 'react';
+import { QRCodeCanvas } from 'qrcode.react';
 import { readSheet } from 'read-excel-file/browser';
 import { motion } from 'framer-motion';
 import {
@@ -17,7 +18,6 @@ import {
   ArrowLeft,
   ChevronRight,
   FileSpreadsheet,
-  KeyRound,
   MapPin,
   Power,
   AlertCircle,
@@ -48,13 +48,9 @@ import {
   writeBatch
 } from "firebase/firestore";
 
-const Scanner = lazy(() => import('./Scanner'));
-
 const MotionDiv = motion.div;
 const WEEKS = Array.from({ length: 15 }, (_, i) => i + 1);
-const PIN_WINDOW_MS = 3 * 60 * 1000;
-const PIN_DISTANCE_METERS = 100;
-const QR_WINDOW_MS = 3 * 60 * 1000;
+const QR_DISTANCE_METERS = 150;
 const MAX_ROSTER_FILE_BYTES = 2 * 1024 * 1024;
 const MAX_ROSTER_ROWS = 5000;
 const SUPPORTED_ROSTER_EXTENSIONS = ['csv', 'xlsx'];
@@ -62,11 +58,11 @@ const SUPPORTED_ROSTER_EXTENSIONS = ['csv', 'xlsx'];
 const normalizeCourseCode = (code = '') => code.replace(/\s+/g, '').toUpperCase();
 const getSessionKey = (courseCode, weekNumber) => `${normalizeCourseCode(courseCode)}-W${weekNumber}`;
 const getStudentDeviceName = (studentID) => `KNUST_STU_${studentID}`;
-const formatCountdown = (seconds = 0) => `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
-const generatePin = () => {
-  const entropy = new Uint32Array(1);
+const generateSessionCode = () => {
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+  const entropy = new Uint32Array(4);
   globalThis.crypto.getRandomValues(entropy);
-  return String(entropy[0] % 10000).padStart(4, '0');
+  return Array.from(entropy, value => value.toString(16).padStart(8, '0')).join('-');
 };
 const stringifyCell = (value) => (value == null ? '' : String(value));
 const normalizeHeader = (value = '') => stringifyCell(value).trim().toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -329,32 +325,6 @@ const getRosterHeaderInfo = (rows) => {
   return null;
 };
 
-const parseQrPayload = (rawResult) => {
-  try {
-    const parsed = JSON.parse(rawResult);
-    return {
-      type: cleanCell(parsed.type),
-      studentID: cleanCell(parsed.studentID || parsed.knust_id || parsed.id),
-      fullName: cleanCell(parsed.fullName || parsed.name),
-      sessionKey: cleanCell(parsed.sessionKey),
-      issuedAtMs: Number(parsed.issuedAtMs) || 0,
-      method: 'QR'
-    };
-  } catch {
-    const idMatch = rawResult.match(/ID:\s*(\d+)/i) || rawResult.match(/(\d{8})/);
-    const nameMatch = rawResult.match(/Name:\s*([^|]+)/i);
-
-    return {
-      type: '',
-      studentID: idMatch ? cleanCell(idMatch[1]) : '',
-      fullName: nameMatch ? cleanCell(nameMatch[1]) : '',
-      sessionKey: '',
-      issuedAtMs: 0,
-      method: 'QR'
-    };
-  }
-};
-
 const getDateValue = (value) => {
   if (!value) return null;
   if (value?.toDate) return value.toDate();
@@ -386,6 +356,24 @@ const sortByStudentId = (rows, direction = 'asc') => {
   });
 };
 
+const isVerifiedRecord = (record) => (record?.status || 'Verified') === 'Verified';
+
+const getStatusClassName = (status = 'Verified') => {
+  if (status === 'Verified') return 'status-tag-verified';
+  if (status === 'Pending') return 'status-tag-pending';
+  return 'status-tag-absent';
+};
+
+const formatMethodLabel = (method = '') => ({
+  QR_GPS: 'QR + GPS',
+  QR_SCAN_PENDING: 'QR Scan Pending',
+  LECTURER_APPROVED_SCAN: 'Lecturer Approved',
+  LECTURER_DENIED_SCAN: 'Lecturer Denied',
+  LECTURER_MANUAL: 'Lecturer Manual',
+  PIN_GPS: 'Legacy PIN + GPS',
+  QR_FALLBACK: 'Legacy Student QR'
+}[method] || method || 'QR Attendance');
+
 export default function LecturerDashboard({ user, onLogout }) {
   const [courses, setCourses] = useState([]);
   const [attendance, setAttendance] = useState({});
@@ -393,10 +381,8 @@ export default function LecturerDashboard({ user, onLogout }) {
   const [currentWeek, setCurrentWeek] = useState(1);
   const [activeSession, setActiveSession] = useState(null);
   const [sessionSecret, setSessionSecret] = useState(null);
-  const [pinSecondsRemaining, setPinSecondsRemaining] = useState(0);
   const [bleStatus, setBleStatus] = useState('');
   const [isBleBusy, setIsBleBusy] = useState(false);
-  const [isQrFallbackOpen, setIsQrFallbackOpen] = useState(false);
   const [rosterStatus, setRosterStatus] = useState('');
   const [isRosterUploading, setIsRosterUploading] = useState(false);
   const [manualStudent, setManualStudent] = useState({
@@ -465,14 +451,15 @@ export default function LecturerDashboard({ user, onLogout }) {
       setActiveSession(sessionData);
       if (!sessionData?.active) return;
 
-      setBleStatus('PIN + GPS session active. The current PIN is shown below.');
+      setBleStatus('Lecturer QR session active. Project the QR code for students to scan.');
     });
 
     return () => unsubscribe();
   }, [activeCourse, currentWeek]);
 
-  // The PIN and lecturer GPS live in a lecturer-only secure subdocument so
-  // students can never read them. Subscribe so the lecturer can display the PIN.
+  // The QR session code and lecturer GPS live in a lecturer-only secure
+  // subdocument. Students prove they saw the projected QR by submitting the
+  // code through the Cloud Function after scanning.
   useEffect(() => {
     if (!activeCourse) {
       setSessionSecret(null);
@@ -744,10 +731,14 @@ export default function LecturerDashboard({ user, onLogout }) {
 
     const sessionKey = getSessionKey(activeCourse.code, weekNumber);
     const recordsSnapshot = await getDocs(collection(db, "attendance", sessionKey, "records"));
-    const presentIds = new Set(recordsSnapshot.docs.map(recordDoc => recordDoc.id));
+    const records = recordsSnapshot.docs.map(recordDoc => ({ id: recordDoc.id, ...recordDoc.data() }));
+    const recordedIds = new Set(records.map(record => record.id || record.studentID));
+    const verifiedCount = records.filter(isVerifiedRecord).length;
+    const pendingCount = records.filter(record => record.status === 'Pending').length;
+    const deniedCount = records.filter(record => record.status === 'Denied').length;
     const registeredStudents = await getRegisteredStudentsForCourse();
     const absentStudents = registeredStudents
-      .filter(student => !presentIds.has(student.studentID))
+      .filter(student => !recordedIds.has(student.studentID))
       .map(student => ({
         studentID: student.studentID,
         fullName: student.fullName || student.name || `Student ${student.studentID}`,
@@ -766,7 +757,9 @@ export default function LecturerDashboard({ user, onLogout }) {
       lecturerName: user.name,
       weekNumber,
       sessionKey,
-      totalVerified: recordsSnapshot.size,
+      totalVerified: verifiedCount,
+      pendingCount,
+      deniedCount,
       absentCount: absentStudents.length,
       absentStudents,
       lastEditedAt: serverTimestamp(),
@@ -789,17 +782,45 @@ export default function LecturerDashboard({ user, onLogout }) {
 
     const recordRef = doc(db, "attendance", sessionKey, "records", resolvedStudentID);
     const existingRecord = await getDoc(recordRef);
+    const now = new Date();
 
     if (existingRecord.exists()) {
-      return {
-        ok: false,
-        alreadyVerified: true,
+      const existing = existingRecord.data();
+
+      if (isVerifiedRecord(existing)) {
+        return {
+          ok: false,
+          alreadyVerified: true,
+          studentID: resolvedStudentID,
+          record: existing
+        };
+      }
+
+      await setDoc(recordRef, {
         studentID: resolvedStudentID,
-        record: existingRecord.data()
-      };
+        indexNumber: roster?.indexNumber || existing.indexNumber || '',
+        referenceNumber: roster?.referenceNumber || existing.referenceNumber || '',
+        fullName: roster?.fullName || roster?.name || cleanDisplayText(fullName) || existing.fullName || `Student ${resolvedStudentID}`,
+        deviceName: cleanDisplayText(deviceName, 80) || existing.deviceName || roster?.deviceName || getStudentDeviceName(resolvedStudentID),
+        timeVerified: now.toLocaleTimeString(),
+        verifiedAt: serverTimestamp(),
+        verifiedAtIso: now.toISOString(),
+        verificationDate: now.toLocaleDateString(),
+        status: "Verified",
+        timestamp: serverTimestamp(),
+        method,
+        verificationNote: cleanDisplayText(verificationNote, 160),
+        verifiedBy: user.id,
+        verifiedByName: user.name,
+        requiresLecturerApproval: false,
+        week: currentWeek,
+        courseCode: normalizeCourseCode(activeCourse.code),
+        sessionKey
+      }, { merge: true });
+
+      return { ok: true, studentID: resolvedStudentID, updatedExisting: true };
     }
 
-    const now = new Date();
     await setDoc(recordRef, {
       studentID: resolvedStudentID,
       indexNumber: roster?.indexNumber || '',
@@ -988,114 +1009,29 @@ export default function LecturerDashboard({ user, onLogout }) {
     }
   };
 
-  const handleQrScanSuccess = async (rawResult) => {
-    if (!activeSession?.active) {
-      setBleStatus('Start the attendance session before using QR fallback.');
-      return;
-    }
-
-    try {
-      const payload = parseQrPayload(rawResult);
-
-      if (!payload.studentID) {
-        setBleStatus('QR fallback failed. No valid student ID was found.');
-        return;
-      }
-
-      if (payload.type !== 'KNUST_ATTENDANCE') {
-        setBleStatus('QR fallback blocked. Ask the student to display the current in-app attendance QR code.');
-        return;
-      }
-
-      if (payload.sessionKey && payload.sessionKey !== currentSessionKey) {
-        setBleStatus('QR fallback blocked. This student code belongs to a different course or week.');
-        return;
-      }
-
-      if (!payload.issuedAtMs || payload.issuedAtMs > Date.now() + 30000 || Date.now() - payload.issuedAtMs > QR_WINDOW_MS) {
-        setBleStatus('QR fallback blocked. The student QR code has expired. Ask the student to refresh the code.');
-        return;
-      }
-
-      const result = await recordAttendance({
-        studentID: payload.studentID,
-        fullName: payload.fullName,
-        method: 'QR_FALLBACK',
-        verificationNote: 'Lecturer scanned student in-app QR fallback.'
-      });
-
-      if (result.alreadyVerified) {
-        setBleStatus(`${payload.fullName || payload.studentID} was already verified for this session.`);
-        setIsQrFallbackOpen(false);
-        return;
-      }
-
-      if (!result.ok) {
-        setBleStatus(result.reason === 'not-rostered'
-          ? `${payload.studentID} is not on this course roster. Add the student manually first, then verify again.`
-          : 'QR fallback blocked. Check that the session is active and the code is valid.'
-        );
-        return;
-      }
-
-      setBleStatus(`${payload.fullName || payload.studentID} verified by QR fallback.`);
-      setIsQrFallbackOpen(false);
-    } catch (error) {
-      console.error('QR fallback failed:', error);
-      setBleStatus('QR fallback failed. Please try again.');
-    }
-  };
-
-  const refreshPinSession = useCallback(async ({ silent = false } = {}) => {
-    if (!activeCourse) return;
-
-    const sessionKey = getSessionKey(activeCourse.code, currentWeek);
-    const position = requireUsableGpsAccuracy(await getRefinedPosition());
-    const nowMs = Date.now();
-    const currentPin = generatePin();
-    const pinExpiresAtMs = nowMs + PIN_WINDOW_MS;
-
-    await setDoc(doc(db, "attendance", sessionKey), {
-      pinIssuedAtMs: nowMs,
-      pinExpiresAtMs,
-      pinWindowMs: PIN_WINDOW_MS,
-      locationThresholdMeters: PIN_DISTANCE_METERS,
-      pinGeneratedAt: serverTimestamp(),
-      locationUpdatedAt: serverTimestamp()
-    }, { merge: true });
-
-    await setDoc(doc(db, "attendance", sessionKey, "secure", "state"), {
-      currentPin,
-      lecturerLocation: toLocationRecord(position, nowMs),
-      pinIssuedAtMs: nowMs,
-      pinExpiresAtMs,
-      pinWindowMs: PIN_WINDOW_MS,
-      updatedAt: serverTimestamp()
-    }, { merge: true });
-
-    if (!silent) {
-      setBleStatus(`PIN refreshed: ${currentPin}. It expires in 3 minutes.`);
-    }
-  }, [activeCourse, currentWeek]);
-
-  const startPinSession = async () => {
+  const startQrSession = async () => {
     if (!activeCourse) return;
 
     if (!activeCourse.rosterCount) {
-      setBleStatus('Upload or manually add students to this course roster before starting a secure attendance session.');
+      setBleStatus('Upload or manually add students to this course roster before starting an attendance session.');
       return;
     }
 
     const sessionKey = getSessionKey(activeCourse.code, currentWeek);
     setIsBleBusy(true);
-    setBleStatus('Requesting lecturer GPS and generating secure PIN...');
+    setBleStatus('Preparing projected QR session and checking lecturer GPS...');
 
     try {
       const now = new Date();
       const nowMs = Date.now();
-      const currentPin = generatePin();
-      const pinExpiresAtMs = nowMs + PIN_WINDOW_MS;
-      const position = requireUsableGpsAccuracy(await getRefinedPosition());
+      const sessionCode = generateSessionCode();
+      let lecturerLocation = null;
+
+      try {
+        lecturerLocation = toLocationRecord(requireUsableGpsAccuracy(await getRefinedPosition()), nowMs);
+      } catch (locationError) {
+        console.warn('Lecturer GPS unavailable; scan-only pending path will remain available:', locationError);
+      }
 
       await setDoc(doc(db, "attendance", sessionKey), {
         active: true,
@@ -1107,36 +1043,41 @@ export default function LecturerDashboard({ user, onLogout }) {
         lecturerId: user.id,
         lecturerName: user.name,
         weekNumber: currentWeek,
-        method: "PIN_GPS",
-        verificationMode: "PIN_GPS",
+        method: "LECTURER_QR",
+        verificationMode: "QR_GPS_OR_APPROVAL",
         sessionKey,
-        pinIssuedAtMs: nowMs,
-        pinExpiresAtMs,
-        pinWindowMs: PIN_WINDOW_MS,
-        locationThresholdMeters: PIN_DISTANCE_METERS,
+        locationThresholdMeters: QR_DISTANCE_METERS,
+        lecturerLocationReady: Boolean(lecturerLocation),
         startedAt: serverTimestamp(),
         startedAtIso: now.toISOString(),
         sessionDate: now.toLocaleDateString(),
         endedAt: null,
-        pinGeneratedAt: serverTimestamp(),
+        qrGeneratedAt: serverTimestamp(),
         locationUpdatedAt: serverTimestamp()
       }, { merge: true });
 
-      await setDoc(doc(db, "attendance", sessionKey, "secure", "state"), {
-        currentPin,
-        lecturerLocation: toLocationRecord(position, nowMs),
-        pinIssuedAtMs: nowMs,
-        pinExpiresAtMs,
-        pinWindowMs: PIN_WINDOW_MS,
+      const secureState = {
+        sessionCode,
+        locationThresholdMeters: QR_DISTANCE_METERS,
+        qrIssuedAtMs: nowMs,
         updatedAt: serverTimestamp()
-      }, { merge: true });
+      };
 
-      setBleStatus(`Session active. Current PIN: ${currentPin}. It will rotate every 3 minutes.`);
+      if (lecturerLocation) {
+        secureState.lecturerLocation = lecturerLocation;
+      }
+
+      await setDoc(doc(db, "attendance", sessionKey, "secure", "state"), secureState, { merge: true });
+
+      setBleStatus(lecturerLocation
+        ? `Session active. Project the QR code. GPS auto-verification is enabled within ${QR_DISTANCE_METERS}m.`
+        : 'Session active. Project the QR code. Lecturer GPS was unavailable, so student scans will require lecturer approval.'
+      );
     } catch (error) {
-      console.error("Unable to start PIN session:", error);
+      console.error("Unable to start QR session:", error);
       setBleStatus(error?.code === 1
-        ? 'Location permission is required to start a PIN + GPS session.'
-        : error.message || 'Unable to start PIN + GPS session. Please check location and Firebase permissions.'
+        ? 'Location permission was blocked. You can retry, or continue with scan-only approvals if the session started.'
+        : error.message || 'Unable to start QR attendance session. Please check Firebase permissions.'
       );
     } finally {
       setIsBleBusy(false);
@@ -1152,10 +1093,14 @@ export default function LecturerDashboard({ user, onLogout }) {
 
     try {
       const recordsSnapshot = await getDocs(collection(db, "attendance", sessionKey, "records"));
-      const presentIds = new Set(recordsSnapshot.docs.map(recordDoc => recordDoc.id));
+      const records = recordsSnapshot.docs.map(recordDoc => ({ id: recordDoc.id, ...recordDoc.data() }));
+      const recordedIds = new Set(records.map(record => record.id || record.studentID));
+      const verifiedCount = records.filter(isVerifiedRecord).length;
+      const pendingCount = records.filter(record => record.status === 'Pending').length;
+      const deniedCount = records.filter(record => record.status === 'Denied').length;
       const registeredStudents = await getRegisteredStudentsForCourse();
       const absentStudents = registeredStudents
-        .filter(student => !presentIds.has(student.studentID))
+        .filter(student => !recordedIds.has(student.studentID))
         .map(student => ({
           studentID: student.studentID,
           fullName: student.fullName || student.name || `Student ${student.studentID}`,
@@ -1168,54 +1113,121 @@ export default function LecturerDashboard({ user, onLogout }) {
       await setDoc(doc(db, "attendance", sessionKey), {
         active: false,
         endedAt: serverTimestamp(),
-        totalVerified: recordsSnapshot.size,
+        totalVerified: verifiedCount,
+        pendingCount,
+        deniedCount,
         absentCount: absentStudents.length,
         absentStudents
       }, { merge: true });
 
-      setBleStatus(`Session ended. ${recordsSnapshot.size} verified, ${absentStudents.length} absent for exports.`);
+      setBleStatus(`Session ended. ${verifiedCount} verified, ${pendingCount} pending approval, ${deniedCount} denied, ${absentStudents.length} no-scan absent.`);
     } catch (error) {
-      console.error("Unable to end PIN session:", error);
+      console.error("Unable to end QR session:", error);
       setBleStatus('Unable to end session. Please check Firebase permissions and try again.');
     } finally {
       setIsBleBusy(false);
     }
   };
 
-  useEffect(() => {
-    if (!activeCourse || !activeSession?.active || activeSession.method !== 'PIN_GPS') return;
+  const updatePendingRecord = async (record, decision) => {
+    if (!activeCourse || !record?.studentID) return;
 
-    const rotationTimer = window.setInterval(() => {
-      refreshPinSession({ silent: true }).catch((error) => {
-        console.error('PIN rotation failed:', error);
-        setBleStatus('PIN rotation paused. Keep location permission enabled and refresh the session.');
+    const sessionKey = getSessionKey(activeCourse.code, currentWeek);
+    const now = new Date();
+    const isAccepted = decision === 'accept';
+
+    await setDoc(doc(db, "attendance", sessionKey, "records", record.studentID), {
+      status: isAccepted ? 'Verified' : 'Denied',
+      method: isAccepted ? 'LECTURER_APPROVED_SCAN' : 'LECTURER_DENIED_SCAN',
+      requiresLecturerApproval: false,
+      approvedBy: isAccepted ? user.id : '',
+      approvedByName: isAccepted ? user.name : '',
+      approvedAt: isAccepted ? serverTimestamp() : null,
+      deniedBy: isAccepted ? '' : user.id,
+      deniedByName: isAccepted ? '' : user.name,
+      deniedAt: isAccepted ? null : serverTimestamp(),
+      timeVerified: isAccepted ? now.toLocaleTimeString() : record.timeVerified || '',
+      verifiedAt: isAccepted ? serverTimestamp() : record.verifiedAt || null,
+      verifiedAtIso: isAccepted ? now.toISOString() : record.verifiedAtIso || '',
+      verificationDate: isAccepted ? now.toLocaleDateString() : record.verificationDate || now.toLocaleDateString(),
+      timestamp: serverTimestamp()
+    }, { merge: true });
+
+    await recordCorrectionAudit({
+      weekNumber: currentWeek,
+      studentID: record.studentID,
+      fullName: record.fullName,
+      action: isAccepted ? 'approved-pending-scan' : 'denied-pending-scan'
+    });
+
+    setBleStatus(`${record.fullName || record.studentID} ${isAccepted ? 'accepted as present' : 'denied'} from the pending scan queue.`);
+  };
+
+  const updateAllPendingRecords = async (decision) => {
+    const pending = pendingRecords;
+    if (!activeCourse || !pending.length) return;
+
+    setIsBleBusy(true);
+    try {
+      const sessionKey = getSessionKey(activeCourse.code, currentWeek);
+      const now = new Date();
+      const isAccepted = decision === 'accept';
+      let batch = writeBatch(db);
+      let operationCount = 0;
+
+      const commitBatch = async () => {
+        if (!operationCount) return;
+        await batch.commit();
+        batch = writeBatch(db);
+        operationCount = 0;
+      };
+
+      pending.forEach(record => {
+        batch.set(doc(db, "attendance", sessionKey, "records", record.studentID), {
+          status: isAccepted ? 'Verified' : 'Denied',
+          method: isAccepted ? 'LECTURER_APPROVED_SCAN' : 'LECTURER_DENIED_SCAN',
+          requiresLecturerApproval: false,
+          approvedBy: isAccepted ? user.id : '',
+          approvedByName: isAccepted ? user.name : '',
+          approvedAt: isAccepted ? serverTimestamp() : null,
+          deniedBy: isAccepted ? '' : user.id,
+          deniedByName: isAccepted ? '' : user.name,
+          deniedAt: isAccepted ? null : serverTimestamp(),
+          timeVerified: isAccepted ? now.toLocaleTimeString() : record.timeVerified || '',
+          verifiedAt: isAccepted ? serverTimestamp() : record.verifiedAt || null,
+          verifiedAtIso: isAccepted ? now.toISOString() : record.verifiedAtIso || '',
+          verificationDate: isAccepted ? now.toLocaleDateString() : record.verificationDate || now.toLocaleDateString(),
+          timestamp: serverTimestamp()
+        }, { merge: true });
+        operationCount += 1;
       });
-    }, PIN_WINDOW_MS);
 
-    return () => window.clearInterval(rotationTimer);
-  }, [activeCourse, activeSession?.active, activeSession?.method, refreshPinSession]);
+      await commitBatch();
+      await addDoc(collection(db, "attendance", sessionKey, "audit"), {
+        action: isAccepted ? 'approved-all-pending-scans' : 'denied-all-pending-scans',
+        count: pending.length,
+        courseCode: normalizeCourseCode(activeCourse.code),
+        weekNumber: currentWeek,
+        editedBy: user.id,
+        editedByName: user.name,
+        editedAt: serverTimestamp()
+      });
 
-  useEffect(() => {
-    if (!activeSession?.active || !activeSession.pinExpiresAtMs) {
-      setPinSecondsRemaining(0);
-      return;
+      setBleStatus(`${pending.length} pending scan${pending.length === 1 ? '' : 's'} ${isAccepted ? 'accepted' : 'denied'}.`);
+    } catch (error) {
+      console.error('Batch pending update failed:', error);
+      setBleStatus('Unable to update pending scans. Please try again.');
+    } finally {
+      setIsBleBusy(false);
     }
-
-    const updateCountdown = () => {
-      setPinSecondsRemaining(Math.max(0, Math.ceil((activeSession.pinExpiresAtMs - Date.now()) / 1000)));
-    };
-    updateCountdown();
-    const countdownTimer = window.setInterval(updateCountdown, 1000);
-
-    return () => window.clearInterval(countdownTimer);
-  }, [activeSession?.active, activeSession?.pinExpiresAtMs]);
+  };
 
   const buildExportRows = async (weekNum) => {
     const selectedWeek = weekNum || currentWeek;
     const sessionKey = getSessionKey(activeCourse.code, selectedWeek);
     const recordsSnapshot = await getDocs(collection(db, "attendance", sessionKey, "records"));
     const sessionSnapshot = await getDoc(doc(db, "attendance", sessionKey));
-    const presentRows = recordsSnapshot.docs.map(recordDoc => {
+    const recordRows = recordsSnapshot.docs.map(recordDoc => {
       const record = recordDoc.data();
       return {
         Course: normalizeCourseCode(activeCourse.code),
@@ -1227,16 +1239,16 @@ export default function LecturerDashboard({ user, onLogout }) {
         DeviceName: record.deviceName || '',
         Time: record.timeVerified,
         Status: record.status || "Verified",
-        Method: record.method || "PIN + GPS"
+        Method: formatMethodLabel(record.method)
       };
     });
 
-    const presentIds = new Set(presentRows.map(row => row.StudentID));
+    const recordedIds = new Set(recordRows.map(row => row.StudentID));
     const savedAbsentees = sessionSnapshot.exists() ? (sessionSnapshot.data().absentStudents || []) : [];
     const absentStudents = savedAbsentees.length
       ? savedAbsentees
       : (await getRegisteredStudentsForCourse())
-          .filter(student => !presentIds.has(student.studentID))
+          .filter(student => !recordedIds.has(student.studentID))
           .map(student => ({
             studentID: student.studentID,
             fullName: student.fullName || student.name || `Student ${student.studentID}`,
@@ -1255,10 +1267,10 @@ export default function LecturerDashboard({ user, onLogout }) {
       DeviceName: student.deviceName || getStudentDeviceName(student.studentID),
       Time: '',
       Status: 'Absent',
-      Method: 'PIN + GPS'
+      Method: 'No Scan'
     }));
 
-    return [...presentRows, ...absentRows];
+    return [...recordRows, ...absentRows];
   };
 
   const downloadCSV = async (weekNum) => {
@@ -1334,7 +1346,7 @@ export default function LecturerDashboard({ user, onLogout }) {
         });
       });
 
-      allRows.forEach(row => {
+      allRows.filter(isVerifiedRecord).forEach(row => {
         const summary = summaryById.get(row.studentID) || {
           studentID: row.studentID,
           indexNumber: row.indexNumber || '',
@@ -1370,9 +1382,25 @@ export default function LecturerDashboard({ user, onLogout }) {
   }, [view, activeCourse, loadCourseHistory]);
 
   const currentSessionKey = activeCourse ? getSessionKey(activeCourse.code, currentWeek) : '';
-  const currentSessionPin = sessionSecret?.currentPin || '----';
+  const lecturerQrPayload = useMemo(() => (
+    activeCourse && activeSession?.active && sessionSecret?.sessionCode
+      ? JSON.stringify({
+          type: 'KNUST_LECTURER_SESSION',
+          sessionKey: currentSessionKey,
+          sessionCode: sessionSecret.sessionCode,
+          courseCode: normalizeCourseCode(activeCourse.code),
+          originalCourseCode: activeCourse.code,
+          weekNumber: currentWeek,
+          issuedAtMs: sessionSecret.qrIssuedAtMs || Date.now()
+        })
+      : ''
+  ), [activeCourse, activeSession?.active, currentSessionKey, currentWeek, sessionSecret?.qrIssuedAtMs, sessionSecret?.sessionCode]);
   const currentRecords = useMemo(() => attendance[currentSessionKey] || [], [attendance, currentSessionKey]);
   const sortedCurrentRecords = useMemo(() => sortByStudentId(currentRecords, 'asc'), [currentRecords]);
+  const verifiedRecords = useMemo(() => currentRecords.filter(record => record.status === 'Verified'), [currentRecords]);
+  const pendingRecords = useMemo(() => sortByStudentId(currentRecords.filter(record => record.status === 'Pending'), 'asc'), [currentRecords]);
+  const deniedRecords = useMemo(() => currentRecords.filter(record => record.status === 'Denied'), [currentRecords]);
+  const verifiedHistoryRows = useMemo(() => historyRows.filter(isVerifiedRecord), [historyRows]);
   const filteredHistoryRows = useMemo(() => {
     const term = historySearchTerm.trim().toLowerCase();
     const filteredRows = historyRows.filter(row => (
@@ -1404,17 +1432,28 @@ export default function LecturerDashboard({ user, onLogout }) {
     const recordsById = new Map((attendance[sessionKey] || []).map(record => [record.studentID, record]));
     const rosterRows = historySummary.map(student => {
       const record = recordsById.get(student.studentID);
+      const recordStatus = record?.status || 'Absent';
       return {
         ...student,
         ...record,
         fullName: record?.fullName || student.fullName,
-        isPresent: Boolean(record)
+        isPresent: recordStatus === 'Verified',
+        hasRecord: Boolean(record),
+        statusLabel: recordStatus
       };
     });
 
     recordsById.forEach(record => {
       if (!rosterRows.some(row => row.studentID === record.studentID)) {
-        rosterRows.push({ ...record, attendedCount: 1, sessions: [`W${editWeek}`], isPresent: true });
+        const recordStatus = record.status || 'Verified';
+        rosterRows.push({
+          ...record,
+          attendedCount: recordStatus === 'Verified' ? 1 : 0,
+          sessions: recordStatus === 'Verified' ? [`W${editWeek}`] : [],
+          isPresent: recordStatus === 'Verified',
+          hasRecord: true,
+          statusLabel: recordStatus
+        });
       }
     });
 
@@ -1430,7 +1469,7 @@ export default function LecturerDashboard({ user, onLogout }) {
     return sortByStudentId(filteredRows, historySortDirection);
   }, [activeCourse, attendance, editSearchTerm, editWeek, historySortDirection, historySummary]);
   const historyAttendanceRate = historySummary.length
-    ? Math.round((historyRows.length / (historySummary.length * WEEKS.length)) * 100)
+    ? Math.round((verifiedHistoryRows.length / (historySummary.length * WEEKS.length)) * 100)
     : 0;
 
   return (
@@ -1639,37 +1678,50 @@ export default function LecturerDashboard({ user, onLogout }) {
             <div className="table-card" style={{borderLeft: `6px solid ${activeSession?.active ? 'var(--knust-green)' : 'var(--knust-yellow)'}`}}>
               <div style={{display: 'flex', justifyContent: 'space-between', gap: '20px', alignItems: 'center', flexWrap: 'wrap'}}>
                 <div style={{display: 'flex', gap: '14px', alignItems: 'center'}}>
-                  <KeyRound size={34} color="var(--knust-blue)" />
+                  <QrCode size={34} color="var(--knust-blue)" />
                   <div>
-                    <h3 style={{fontSize: '1rem', color: 'var(--knust-blue)', marginBottom: '4px'}}>PIN + GPS Attendance Session</h3>
-                    <p style={{color: 'var(--text-muted)', fontSize: '0.9rem'}}>Current PIN: <strong style={{fontSize: '1.35rem', letterSpacing: '3px'}}>{currentSessionPin}</strong></p>
+                    <h3 style={{fontSize: '1rem', color: 'var(--knust-blue)', marginBottom: '4px'}}>Projected QR Attendance Session</h3>
                     <p style={{color: 'var(--text-muted)', fontSize: '0.8rem'}}>
-                      Next rotation: {formatCountdown(pinSecondsRemaining)}. GPS threshold: {PIN_DISTANCE_METERS}m.
-                      {sessionSecret?.lecturerLocation?.accuracy ? ` Accuracy: +/-${sessionSecret.lecturerLocation.accuracy}m.` : ''}
+                      Students scan this lecturer QR. GPS auto-verifies within {QR_DISTANCE_METERS}m; scan-only submissions wait for your approval.
+                      {sessionSecret?.lecturerLocation?.accuracy ? ` Lecturer GPS accuracy: +/-${sessionSecret.lecturerLocation.accuracy}m.` : ''}
                     </p>
                   </div>
                 </div>
 
                 <button
-                  onClick={activeSession?.active ? endBleSession : startPinSession}
+                  onClick={activeSession?.active ? endBleSession : startQrSession}
                   disabled={isBleBusy}
                   className={`scan-btn-master ${activeSession?.active ? 'is-active' : ''}`}
                   style={{minWidth: '220px'}}
                 >
                   {activeSession?.active ? <Power size={18} /> : <MapPin size={18} />}
-                  {isBleBusy ? 'Processing...' : activeSession?.active ? 'End Session' : 'Start PIN Session'}
+                  {isBleBusy ? 'Processing...' : activeSession?.active ? 'End Session' : 'Start QR Session'}
                 </button>
               </div>
 
-              <div style={{display: 'flex', gap: '12px', flexWrap: 'wrap', marginTop: '18px'}}>
-                <button
-                  onClick={() => setIsQrFallbackOpen(prev => !prev)}
-                  className="btn-download"
-                  style={{background: 'var(--knust-blue)', padding: '10px 16px'}}
-                >
-                  <QrCode size={18} /> {isQrFallbackOpen ? 'Close QR Fallback' : 'Open QR Fallback'}
-                </button>
-              </div>
+              {activeSession?.active && (
+                <div className="qr-session-grid" style={{display: 'grid', gridTemplateColumns: 'minmax(240px, 360px) 1fr', gap: '20px', alignItems: 'center', marginTop: '22px'}}>
+                  <div style={{background: '#fff', border: '4px solid var(--knust-blue)', borderRadius: '18px', padding: '18px', textAlign: 'center'}}>
+                    {lecturerQrPayload ? (
+                      <QRCodeCanvas value={lecturerQrPayload} size={300} level="H" includeMargin />
+                    ) : (
+                      <div style={{height: '300px', display: 'grid', placeItems: 'center', color: 'var(--text-muted)', fontWeight: 700}}>
+                        Preparing QR...
+                      </div>
+                    )}
+                    <p style={{fontSize: '0.82rem', color: 'var(--text-muted)', marginTop: '10px', fontWeight: 700}}>
+                      {activeCourse.code} - Week {currentWeek}
+                    </p>
+                  </div>
+
+                  <div className="stats-grid" style={{margin: 0}}>
+                    <div className="stat-card" style={{borderLeft: '5px solid var(--knust-green)'}}><h3>Verified</h3><p>{verifiedRecords.length}</p></div>
+                    <div className="stat-card" style={{borderLeft: '5px solid var(--knust-yellow)'}}><h3>Pending</h3><p>{pendingRecords.length}</p></div>
+                    <div className="stat-card" style={{borderLeft: '5px solid #be123c'}}><h3>Denied</h3><p>{deniedRecords.length}</p></div>
+                    <div className="stat-card" style={{borderLeft: '5px solid var(--knust-blue)'}}><h3>Roster</h3><p>{activeCourse.rosterCount || 0}</p></div>
+                  </div>
+                </div>
+              )}
 
               {bleStatus && (
                 <div style={{
@@ -1688,11 +1740,37 @@ export default function LecturerDashboard({ user, onLogout }) {
                 </div>
               )}
 
-              {isQrFallbackOpen && (
-                <div style={{maxWidth: '520px', margin: '20px auto 0', borderRadius: '18px', overflow: 'hidden', border: '3px solid var(--knust-blue)', background: '#fff', padding: '12px'}}>
-                  <Suspense fallback={<div style={{padding: '24px', textAlign: 'center', color: 'var(--text-muted)'}}>Loading scanner...</div>}>
-                    <Scanner onResult={handleQrScanSuccess} onClose={() => setIsQrFallbackOpen(false)} />
-                  </Suspense>
+              {pendingRecords.length > 0 && (
+                <div className="table-card table-wrapper" style={{marginTop: '20px', marginBottom: 0, borderLeft: '5px solid var(--knust-yellow)'}}>
+                  <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', flexWrap: 'wrap', marginBottom: '14px'}}>
+                    <div>
+                      <h3 style={{fontSize: '1rem', color: 'var(--knust-blue)'}}>Pending Scan-Only Confirmations</h3>
+                      <p style={{fontSize: '0.82rem', color: 'var(--text-muted)'}}>These students scanned successfully but need lecturer confirmation because GPS was unavailable or restricted.</p>
+                    </div>
+                    <div style={{display: 'flex', gap: '10px', flexWrap: 'wrap'}}>
+                      <button type="button" className="mini-action-btn present" disabled={isBleBusy} onClick={() => updateAllPendingRecords('accept')}>Allow All</button>
+                      <button type="button" className="mini-action-btn absent" disabled={isBleBusy} onClick={() => updateAllPendingRecords('deny')}>Deny All</button>
+                    </div>
+                  </div>
+                  <table className="pro-table">
+                    <thead><tr><th>Student</th><th>Index / Ref</th><th>Requested</th><th>Reason</th><th>Decision</th></tr></thead>
+                    <tbody>
+                      {pendingRecords.map(record => (
+                        <tr key={`pending-${record.studentID}`}>
+                          <td><div className="student-cell"><span className="s-id">{record.studentID}</span><span className="s-name">{record.fullName}</span></div></td>
+                          <td><div className="student-cell"><span className="s-id">{record.indexNumber || 'N/A'}</span><span className="s-name">{record.referenceNumber || 'No ref'}</span></div></td>
+                          <td>{record.timeVerified || 'Just now'}</td>
+                          <td>{record.pendingReason || 'Scan-only request'}</td>
+                          <td>
+                            <div style={{display: 'flex', gap: '8px', flexWrap: 'wrap'}}>
+                              <button type="button" className="mini-action-btn present" disabled={isBleBusy} onClick={() => updatePendingRecord(record, 'accept')}>Accept</button>
+                              <button type="button" className="mini-action-btn absent" disabled={isBleBusy} onClick={() => updatePendingRecord(record, 'deny')}>Deny</button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
               )}
 
@@ -1741,7 +1819,9 @@ export default function LecturerDashboard({ user, onLogout }) {
             <div className="table-card table-wrapper">
               <div style={{padding: '20px', borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap'}}>
                 <h3 style={{fontSize: '1rem'}}>Live Attendance List</h3>
-                <span style={{fontSize: '0.8rem', color: 'var(--knust-green)', fontWeight: '700'}}>{currentRecords.length} Students Present</span>
+                <span style={{fontSize: '0.8rem', color: 'var(--knust-green)', fontWeight: '700'}}>
+                  {verifiedRecords.length} Verified | {pendingRecords.length} Pending | {deniedRecords.length} Denied
+                </span>
               </div>
               <table className="pro-table">
                 <thead><tr><th>Student Details</th><th>Index / Ref</th><th>Check-in Time</th><th>Method</th><th>Verification</th></tr></thead>
@@ -1758,8 +1838,13 @@ export default function LecturerDashboard({ user, onLogout }) {
                         <td><div className="student-cell"><span className="s-id">{s.studentID}</span><span className="s-name">{s.fullName}</span></div></td>
                         <td><div className="student-cell"><span className="s-id">{s.indexNumber || 'N/A'}</span><span className="s-name">{s.referenceNumber || 'No ref'}</span></div></td>
                         <td>{s.timeVerified}</td>
-                        <td>{s.method || 'PIN + GPS'}</td>
-                        <td><span className="status-tag-verified" style={{display: 'flex', alignItems: 'center', gap: '5px', width: 'fit-content'}}><CheckCircle size={12}/> Verified</span></td>
+                        <td>{formatMethodLabel(s.method)}</td>
+                        <td>
+                          <span className={getStatusClassName(s.status)} style={{display: 'flex', alignItems: 'center', gap: '5px', width: 'fit-content'}}>
+                            {s.status === 'Verified' ? <CheckCircle size={12}/> : <AlertCircle size={12}/>}
+                            {s.status || 'Verified'}
+                          </span>
+                        </td>
                       </tr>
                     ))}
                 </tbody>
@@ -1777,8 +1862,8 @@ export default function LecturerDashboard({ user, onLogout }) {
             </div>
 
             <div className="stats-grid">
-              <div className="stat-card" style={{borderLeft: '5px solid var(--knust-blue)'}}><h3>Total Verifications</h3><p>{historyRows.length}</p></div>
-              <div className="stat-card" style={{borderLeft: '5px solid var(--knust-green)'}}><h3>Unique Students</h3><p>{new Set(historyRows.map(s => s.studentID)).size}</p></div>
+              <div className="stat-card" style={{borderLeft: '5px solid var(--knust-blue)'}}><h3>Total Verifications</h3><p>{verifiedHistoryRows.length}</p></div>
+              <div className="stat-card" style={{borderLeft: '5px solid var(--knust-green)'}}><h3>Unique Students</h3><p>{new Set(verifiedHistoryRows.map(s => s.studentID)).size}</p></div>
               <div className="stat-card" style={{borderLeft: '5px solid var(--knust-yellow)'}}><h3>Weeks Recorded</h3><p>{WEEKS.filter(w => attendance[getSessionKey(activeCourse.code, w)]?.length > 0).length}</p></div>
               <div className="stat-card" style={{borderLeft: '5px solid var(--knust-green)'}}><h3>Semester Rate</h3><p>{historyAttendanceRate}%</p></div>
             </div>
@@ -1853,11 +1938,11 @@ export default function LecturerDashboard({ user, onLogout }) {
                       <td><div className="student-cell"><span className="s-id">{student.studentID}</span><span className="s-name">{student.fullName}</span></div></td>
                       <td><div className="student-cell"><span className="s-id">{student.indexNumber || 'N/A'}</span><span className="s-name">{student.referenceNumber || 'No ref'}</span></div></td>
                       <td>
-                        <span className={student.isPresent ? 'status-tag-verified' : 'status-tag-absent'}>
-                          {student.isPresent ? 'Present' : 'Absent'}
+                        <span className={getStatusClassName(student.statusLabel)}>
+                          {student.isPresent ? 'Present' : student.statusLabel || 'Absent'}
                         </span>
                       </td>
-                      <td>{student.method || 'N/A'}</td>
+                      <td>{student.method ? formatMethodLabel(student.method) : 'N/A'}</td>
                       <td>
                         <div style={{display: 'flex', gap: '8px', flexWrap: 'wrap'}}>
                           <button
@@ -1871,7 +1956,7 @@ export default function LecturerDashboard({ user, onLogout }) {
                           <button
                             type="button"
                             className="mini-action-btn absent"
-                            disabled={isCorrectionSaving || !student.isPresent}
+                            disabled={isCorrectionSaving || !student.hasRecord}
                             onClick={() => markStudentAbsentForWeek(student, editWeek)}
                           >
                             Mark Absent
@@ -1925,8 +2010,8 @@ export default function LecturerDashboard({ user, onLogout }) {
                       <td><div className="student-cell"><span className="s-id">{s.indexNumber || 'N/A'}</span><span className="s-name">{s.referenceNumber || 'No ref'}</span></div></td>
                       <td><div style={{display: 'flex', alignItems: 'center', gap: '8px'}}><CalendarDays size={14} /> Week {s.week}</div></td>
                       <td>{s.dateTime || s.timeVerified || s.sessionDate}</td>
-                      <td>{s.method || 'PIN + GPS'}</td>
-                      <td><span className="status-tag-verified">Verified</span></td>
+                      <td>{formatMethodLabel(s.method)}</td>
+                      <td><span className={getStatusClassName(s.status)}>{s.status || 'Verified'}</span></td>
                     </tr>
                   ))}
                 </tbody>

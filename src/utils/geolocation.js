@@ -1,6 +1,6 @@
 const DEFAULT_MAX_WAIT_MS = 10000;
 const DEFAULT_TARGET_ACCURACY_METERS = 35;
-export const MAX_ACCEPTABLE_GPS_ACCURACY_METERS = 100;
+export const MAX_ACCEPTABLE_GPS_ACCURACY_METERS = 150;
 
 const isUsablePosition = (position) => (
   Number.isFinite(position?.coords?.latitude)

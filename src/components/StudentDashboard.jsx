@@ -1,7 +1,6 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { QRCodeCanvas } from 'qrcode.react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
-import { AlertCircle, CheckCircle, KeyRound, LogOut, MapPin, QrCode } from 'lucide-react';
+import { AlertCircle, CheckCircle, Clock, LogOut, MapPin, QrCode, ShieldCheck } from 'lucide-react';
 import { db, functions } from '../firebase';
 import {
   collection,
@@ -11,12 +10,11 @@ import {
   where
 } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
+import Scanner from './Scanner';
 import { getRefinedPosition, requireUsableGpsAccuracy } from '../utils/geolocation';
 
 const MotionDiv = motion.div;
-const LOCATION_THRESHOLD_METERS = 100;
-const QR_REFRESH_MS = 60 * 1000;
-const formatCountdown = (seconds = 0) => `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+const LOCATION_THRESHOLD_METERS = 150;
 
 const createDeviceKey = () => {
   const browserCrypto = globalThis.crypto;
@@ -43,167 +41,218 @@ const getBrowserDeviceKey = () => {
   return nextKey;
 };
 
+const parseLecturerQrPayload = (decodedText) => {
+  let payload;
+
+  try {
+    payload = JSON.parse(decodedText);
+  } catch {
+    throw new Error('This is not a valid KNUST lecturer attendance QR code.');
+  }
+
+  if (
+    payload?.type !== 'KNUST_LECTURER_SESSION' ||
+    typeof payload.sessionKey !== 'string' ||
+    typeof payload.sessionCode !== 'string'
+  ) {
+    throw new Error('Scan the QR code projected by the lecturer for this active class.');
+  }
+
+  return {
+    sessionKey: payload.sessionKey.trim(),
+    sessionCode: payload.sessionCode.trim(),
+    courseCode: payload.originalCourseCode || payload.courseCode || 'Course',
+    weekNumber: payload.weekNumber || ''
+  };
+};
+
+const getRecordStatusTheme = (status) => {
+  if (status === 'Verified') {
+    return {
+      background: '#dcfce7',
+      color: '#166534',
+      border: '1px solid #bbf7d0',
+      icon: <CheckCircle size={16} />
+    };
+  }
+
+  if (status === 'Pending') {
+    return {
+      background: '#fffbeb',
+      color: '#92400e',
+      border: '1px solid #fde68a',
+      icon: <Clock size={16} />
+    };
+  }
+
+  return {
+    background: '#fee2e2',
+    color: '#991b1b',
+    border: '1px solid #fecaca',
+    icon: <AlertCircle size={16} />
+  };
+};
+
+const formatMethodLabel = (method = '') => ({
+  QR_GPS: 'QR + GPS',
+  QR_SCAN_PENDING: 'QR Scan Pending',
+  LECTURER_APPROVED_SCAN: 'Lecturer Approved',
+  LECTURER_DENIED_SCAN: 'Lecturer Denied',
+  LECTURER_MANUAL: 'Lecturer Manual'
+}[method] || method || 'QR Attendance');
+
 export default function StudentDashboard({ user, onLogout }) {
-  const [sessions, setSessions] = useState([]);
-  const [selectedSessionKey, setSelectedSessionKey] = useState('');
+  const [activeSessions, setActiveSessions] = useState([]);
   const [status, setStatus] = useState('');
   const [error, setError] = useState('');
   const [isVerifying, setIsVerifying] = useState(false);
-  const [verifiedSessionKey, setVerifiedSessionKey] = useState('');
-  const [existingVerification, setExistingVerification] = useState(null);
-  const [pinInput, setPinInput] = useState('');
-  const [qrIssuedAtMs, setQrIssuedAtMs] = useState(() => Date.now());
-  const [pinSecondsRemaining, setPinSecondsRemaining] = useState(0);
+  const [scannerMode, setScannerMode] = useState('gps');
+  const [isScannerOpen, setIsScannerOpen] = useState(false);
+  const [scannedSession, setScannedSession] = useState(null);
+  const [recordSessionKey, setRecordSessionKey] = useState('');
+  const [currentRecord, setCurrentRecord] = useState(null);
+  const [studentHistory, setStudentHistory] = useState([]);
+  const [studentSummary, setStudentSummary] = useState({ verified: 0, pending: 0, denied: 0, total: 0, courses: [] });
+  const [isHistoryLoading, setIsHistoryLoading] = useState(false);
+  const studentId = user.knust_id || user.id;
+
+  const loadStudentHistory = useCallback(async () => {
+    setIsHistoryLoading(true);
+
+    try {
+      const getStudentAttendanceHistory = httpsCallable(functions, 'getStudentAttendanceHistory');
+      const { data } = await getStudentAttendanceHistory();
+      setStudentHistory(Array.isArray(data?.records) ? data.records : []);
+      setStudentSummary(data?.summary || { verified: 0, pending: 0, denied: 0, total: 0, courses: [] });
+    } catch (historyError) {
+      console.error('Student history load failed:', historyError);
+    } finally {
+      setIsHistoryLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadStudentHistory();
+  }, [loadStudentHistory]);
 
   useEffect(() => {
     const activeSessionsQuery = query(collection(db, 'attendance'), where('active', '==', true));
 
     const unsubscribe = onSnapshot(activeSessionsQuery, (snapshot) => {
-      const pinSessions = snapshot.docs
+      const qrSessions = snapshot.docs
         .map(sessionDoc => ({ id: sessionDoc.id, ...sessionDoc.data() }))
-        .filter(session => session.method === 'PIN_GPS');
+        .filter(session => session.method === 'LECTURER_QR');
 
-      setSessions(pinSessions);
-
-      if (!selectedSessionKey && pinSessions.length === 1) {
-        setSelectedSessionKey(pinSessions[0].id);
-      }
-
-      if (selectedSessionKey && !pinSessions.some(session => session.id === selectedSessionKey)) {
-        setSelectedSessionKey('');
-      }
+      setActiveSessions(qrSessions);
     });
 
     return () => unsubscribe();
-  }, [selectedSessionKey]);
-
-  const selectedSession = useMemo(() => (
-    sessions.find(session => session.id === selectedSessionKey) || sessions[0] || null
-  ), [sessions, selectedSessionKey]);
-  const studentId = user.knust_id || user.id;
-  const qrValue = useMemo(() => (
-    selectedSession
-      ? JSON.stringify({
-          type: 'KNUST_ATTENDANCE',
-          studentID: studentId,
-          fullName: user.name,
-          sessionKey: selectedSession.id,
-          courseCode: selectedSession.courseCode,
-          week: selectedSession.weekNumber,
-          issuedAtMs: qrIssuedAtMs
-        })
-      : ''
-  ), [qrIssuedAtMs, selectedSession, studentId, user.name]);
-  const isAlreadyVerified = Boolean(selectedSession && existingVerification?.sessionKey === selectedSession.id);
+  }, []);
 
   useEffect(() => {
-    setQrIssuedAtMs(Date.now());
-    const qrRefreshTimer = window.setInterval(() => setQrIssuedAtMs(Date.now()), QR_REFRESH_MS);
-
-    return () => window.clearInterval(qrRefreshTimer);
-  }, [selectedSession?.id]);
-
-  useEffect(() => {
-    if (!selectedSession?.pinExpiresAtMs) {
-      setPinSecondsRemaining(0);
+    if (!recordSessionKey || !studentId) {
+      setCurrentRecord(null);
       return;
     }
 
-    const updateCountdown = () => {
-      setPinSecondsRemaining(Math.max(0, Math.ceil((selectedSession.pinExpiresAtMs - Date.now()) / 1000)));
-    };
-    updateCountdown();
-    const countdownTimer = window.setInterval(updateCountdown, 1000);
-
-    return () => window.clearInterval(countdownTimer);
-  }, [selectedSession?.pinExpiresAtMs]);
-
-  useEffect(() => {
-    if (!selectedSession || !studentId) {
-      setExistingVerification(null);
-      return;
-    }
-
-    const recordRef = doc(db, 'attendance', selectedSession.id, 'records', studentId);
+    const recordRef = doc(db, 'attendance', recordSessionKey, 'records', studentId);
     const unsubscribe = onSnapshot(recordRef, (snapshot) => {
-      if (!snapshot.exists()) {
-        setExistingVerification(null);
-        return;
-      }
-
-      const record = snapshot.data();
-      setExistingVerification(record);
-      setVerifiedSessionKey(selectedSession.id);
-      setStatus(`You are verified for ${selectedSession.courseCode || selectedSession.originalCourseCode}.`);
+      setCurrentRecord(snapshot.exists() ? snapshot.data() : null);
     });
 
     return () => unsubscribe();
-  }, [selectedSession, studentId]);
+  }, [recordSessionKey, studentId]);
 
-  const verifyPresence = async () => {
+  const latestCourseLabel = useMemo(() => {
+    if (scannedSession) {
+      return `${scannedSession.courseCode}${scannedSession.weekNumber ? ` Week ${scannedSession.weekNumber}` : ''}`;
+    }
+
+    if (activeSessions.length === 1) {
+      const session = activeSessions[0];
+      return `${session.originalCourseCode || session.courseCode} Week ${session.weekNumber}`;
+    }
+
+    return '';
+  }, [activeSessions, scannedSession]);
+
+  const openScanner = (mode) => {
+    setScannerMode(mode);
+    setIsScannerOpen(true);
+    setError('');
+    setStatus(mode === 'gps'
+      ? 'Scan the lecturer QR code. Your GPS will be checked silently after scanning.'
+      : 'Scan the lecturer QR code. Your attendance will wait for lecturer confirmation.'
+    );
+  };
+
+  const submitScannedAttendance = async (decodedText) => {
     setError('');
     setStatus('');
-    setVerifiedSessionKey('');
-    const submittedPin = pinInput.trim();
-
-    if (!selectedSession) {
-      setError('No active PIN attendance session is available right now.');
-      return;
-    }
-
-    if (!/^\d{4}$/.test(submittedPin)) {
-      setError('Enter the current 4-digit PIN displayed by the lecturer.');
-      return;
-    }
-
-    if (!navigator.geolocation) {
-      setError('This browser does not support GPS location. Please use a GPS-enabled browser.');
-      return;
-    }
-
-    const deviceKey = getBrowserDeviceKey();
+    setCurrentRecord(null);
     setIsVerifying(true);
-    setStatus('Checking PIN and location...');
 
     try {
-      const position = requireUsableGpsAccuracy(await getRefinedPosition());
-      const submitAttendance = httpsCallable(functions, 'submitAttendance');
+      const lecturerSession = parseLecturerQrPayload(decodedText);
+      const requestPayload = {
+        sessionKey: lecturerSession.sessionKey,
+        sessionCode: lecturerSession.sessionCode,
+        mode: scannerMode,
+        deviceKey: getBrowserDeviceKey()
+      };
 
-      const { data } = await submitAttendance({
-        sessionKey: selectedSession.id,
-        pin: submittedPin,
-        latitude: position.coords.latitude,
-        longitude: position.coords.longitude,
-        accuracy: Math.round(position.coords.accuracy),
-        deviceKey
-      });
+      setScannedSession(lecturerSession);
+      setRecordSessionKey(lecturerSession.sessionKey);
 
-      const courseLabel = selectedSession.courseCode || selectedSession.originalCourseCode;
-      setVerifiedSessionKey(selectedSession.id);
+      if (scannerMode === 'gps') {
+        if (!navigator.geolocation) {
+          throw new Error('This browser does not support GPS. Use scan-only and wait for lecturer approval.');
+        }
 
-      if (data?.status === 'already-verified') {
-        setStatus(`You are already verified for ${courseLabel}.`);
-        return;
+        setStatus('QR scanned. Refining your GPS position...');
+        const position = requireUsableGpsAccuracy(await getRefinedPosition());
+        requestPayload.latitude = position.coords.latitude;
+        requestPayload.longitude = position.coords.longitude;
+        requestPayload.accuracy = Math.round(position.coords.accuracy);
+      } else {
+        setStatus('QR scanned. Submitting for lecturer approval...');
       }
 
-      setPinInput('');
-      const distanceText = Number.isFinite(data?.distanceMeters) ? ` Distance: ${data.distanceMeters}m.` : '';
-      setStatus(`Presence verified for ${courseLabel}.${distanceText}`);
+      const submitAttendance = httpsCallable(functions, 'submitAttendance');
+      const { data } = await submitAttendance(requestPayload);
+      const courseLabel = `${lecturerSession.courseCode}${lecturerSession.weekNumber ? ` Week ${lecturerSession.weekNumber}` : ''}`;
+
+      if (data?.status === 'verified') {
+        const distanceText = Number.isFinite(data?.distanceMeters) ? ` Distance: ${data.distanceMeters}m.` : '';
+        setStatus(`Presence verified for ${courseLabel}.${distanceText}`);
+      } else if (data?.status === 'pending') {
+        setStatus(`QR scan recorded for ${courseLabel}. Waiting for lecturer approval.`);
+      } else if (data?.status === 'denied') {
+        setError('This attendance request was denied by the lecturer.');
+        setStatus('');
+      } else {
+        setStatus(`Attendance scan received for ${courseLabel}.`);
+      }
+
+      await loadStudentHistory();
     } catch (verificationError) {
       const message = verificationError?.code === 1
-        ? 'Location permission is required to verify attendance.'
-        : verificationError?.message || 'PIN + GPS verification failed. Please try again.';
+        ? 'Location permission is required for GPS verification. Use scan-only if your lecturer permits it.'
+        : verificationError?.message || 'QR verification failed. Please try again.';
       setError(message);
       setStatus('');
     } finally {
       setIsVerifying(false);
+      setIsScannerOpen(false);
     }
   };
+
+  const statusTheme = currentRecord ? getRecordStatusTheme(currentRecord.status || 'Verified') : null;
 
   return (
     <div className="knust-login-page">
       <MotionDiv
-        className="login-glass-card"
+        className="login-glass-card student-suite-card"
         initial={{ opacity: 0, y: 18, scale: 0.98 }}
         animate={{ opacity: 1, y: 0, scale: 1 }}
         transition={{ duration: 0.45, ease: 'easeOut' }}
@@ -229,46 +278,43 @@ export default function StudentDashboard({ user, onLogout }) {
           textAlign: 'left'
         }}>
           <div style={{display: 'flex', gap: '12px', alignItems: 'center', marginBottom: '14px'}}>
-            <KeyRound size={30} color="#003366" />
+            <QrCode size={30} color="#003366" />
             <div>
-              <h3 style={{color: '#003366', fontSize: '1rem', margin: 0}}>PIN + GPS Presence</h3>
-              <p style={{color: '#64748b', fontSize: '0.8rem', margin: 0}}>Enter the lecturer's current 4-digit PIN.</p>
+              <h3 style={{color: '#003366', fontSize: '1rem', margin: 0}}>Lecturer QR Attendance</h3>
+              <p style={{color: '#64748b', fontSize: '0.8rem', margin: 0}}>Scan the projected lecturer QR code to verify this class.</p>
             </div>
           </div>
 
-          {sessions.length > 1 && (
-            <select
-              value={selectedSession?.id || ''}
-              onChange={(e) => setSelectedSessionKey(e.target.value)}
-              className="week-dropdown"
-              style={{width: '100%', marginBottom: '12px'}}
-            >
-              {sessions.map(session => (
-                <option key={session.id} value={session.id}>
-                  {session.originalCourseCode || session.courseCode} - Week {session.weekNumber}
-                </option>
-              ))}
-            </select>
-          )}
+          <div className="student-status-grid">
+            <div style={{padding: '12px', borderRadius: '12px', background: activeSessions.length ? '#f0fdf4' : '#f8fafc', border: activeSessions.length ? '1px solid #bbf7d0' : '1px solid #e2e8f0'}}>
+              <p style={{fontSize: '0.72rem', color: '#64748b', fontWeight: 800, textTransform: 'uppercase'}}>Active QR Sessions</p>
+              <strong style={{color: activeSessions.length ? '#166534' : '#64748b', fontSize: '1.4rem'}}>{activeSessions.length}</strong>
+            </div>
+            <div style={{padding: '12px', borderRadius: '12px', background: '#eff6ff', border: '1px solid #bfdbfe'}}>
+              <p style={{fontSize: '0.72rem', color: '#64748b', fontWeight: 800, textTransform: 'uppercase'}}>GPS Radius</p>
+              <strong style={{color: '#003366', fontSize: '1.4rem'}}>{LOCATION_THRESHOLD_METERS}m</strong>
+            </div>
+          </div>
 
+          <p style={{color: '#64748b', fontSize: '0.82rem', margin: '14px 0 0', lineHeight: 1.5}}>
+            GPS verification gives immediate confirmation. If your phone blocks location, use scan-only and wait while the lecturer confirms you are in class.
+          </p>
+        </div>
+
+        {latestCourseLabel && (
           <div style={{
             padding: '12px',
             borderRadius: '12px',
-            background: sessions.length ? '#f0fdf4' : '#f8fafc',
-            color: sessions.length ? '#166534' : '#64748b',
-            border: sessions.length ? '1px solid #bbf7d0' : '1px solid #e2e8f0',
+            background: '#f8fafc',
+            color: '#003366',
+            border: '1px solid #e2e8f0',
             fontSize: '0.85rem',
-            fontWeight: 600
+            fontWeight: 700,
+            marginBottom: '15px'
           }}>
-            {selectedSession
-              ? `${selectedSession.originalCourseCode || selectedSession.courseCode} Week ${selectedSession.weekNumber}: next PIN in ${formatCountdown(pinSecondsRemaining)}`
-              : 'Waiting for a lecturer to start a PIN session.'}
+            Current context: {latestCourseLabel}
           </div>
-
-          <p style={{color: '#64748b', fontSize: '0.8rem', margin: '12px 0 0'}}>
-            Location threshold: <strong>{selectedSession?.locationThresholdMeters || LOCATION_THRESHOLD_METERS}m</strong>
-          </p>
-        </div>
+        )}
 
         {error && (
           <div style={{
@@ -292,13 +338,13 @@ export default function StudentDashboard({ user, onLogout }) {
 
         {status && (
           <div style={{
-            background: verifiedSessionKey ? '#dcfce7' : '#eff6ff',
-            color: verifiedSessionKey ? '#166534' : '#1d4ed8',
+            background: status.includes('Waiting') || status.includes('approval') ? '#fffbeb' : '#eff6ff',
+            color: status.includes('Waiting') || status.includes('approval') ? '#92400e' : '#1d4ed8',
             padding: '10px',
             borderRadius: '8px',
             marginBottom: '15px',
             fontSize: '0.85rem',
-            border: verifiedSessionKey ? '1px solid #bbf7d0' : '1px solid #bfdbfe',
+            border: status.includes('Waiting') || status.includes('approval') ? '1px solid #fde68a' : '1px solid #bfdbfe',
             textAlign: 'center',
             fontWeight: '500',
             display: 'flex',
@@ -306,87 +352,150 @@ export default function StudentDashboard({ user, onLogout }) {
             justifyContent: 'center',
             gap: '8px'
           }}>
-            {verifiedSessionKey ? <CheckCircle size={16} /> : <MapPin size={16} />} {status}
+            {status.includes('Waiting') || status.includes('approval') ? <Clock size={16} /> : <MapPin size={16} />} {status}
           </div>
         )}
 
-        {selectedSession && !isAlreadyVerified && (
+        {currentRecord && statusTheme && (
           <div style={{
-            margin: '18px 0',
-            padding: '16px',
-            background: '#ffffff',
-            borderRadius: '16px',
-            border: '1px solid #e2e8f0',
-            boxShadow: '0 4px 12px rgba(0,0,0,0.08)'
-          }}>
-            <input
-              placeholder="4-digit PIN"
-              inputMode="numeric"
-              maxLength={4}
-              value={pinInput}
-              onChange={(event) => setPinInput(event.target.value.replace(/\D/g, '').slice(0, 4))}
-              style={{
-                width: '100%',
-                textAlign: 'center',
-                fontSize: '2rem',
-                letterSpacing: '8px',
-                fontWeight: 900,
-                color: '#003366',
-                border: '2px solid #dbeafe',
-                borderRadius: '14px',
-                padding: '12px',
-                outline: 'none'
-              }}
-            />
-          </div>
-        )}
-
-        {selectedSession && (
-          <div style={{
-            margin: '18px 0',
-            padding: '16px',
-            background: '#ffffff',
-            borderRadius: '16px',
-            border: '1px solid #e2e8f0',
-            boxShadow: '0 4px 12px rgba(0,0,0,0.08)'
-          }}>
-            <div style={{display: 'flex', gap: '10px', alignItems: 'center', justifyContent: 'center', marginBottom: '12px', color: '#003366', fontWeight: 800}}>
-              <QrCode size={18} /> QR Backup
-            </div>
-            <p style={{color: '#64748b', fontSize: '0.78rem', margin: '0 0 10px', textAlign: 'center'}}>
-              Show this rotating fallback code to the lecturer if PIN + GPS verification is unavailable.
-            </p>
-            <QRCodeCanvas
-              value={qrValue}
-              size={180}
-              level="H"
-              includeMargin
-            />
-          </div>
-        )}
-
-        <button
-          onClick={verifyPresence}
-          className="login-btn-final"
-          disabled={!selectedSession || isVerifying || isAlreadyVerified}
-          style={{
-            background: '#006837',
-            width: '100%',
-            padding: '14px',
+            ...statusTheme,
+            padding: '12px',
             borderRadius: '12px',
-            color: 'white',
-            border: 'none',
-            cursor: !selectedSession || isVerifying || isAlreadyVerified ? 'not-allowed' : 'pointer',
-            opacity: !selectedSession || isVerifying || isAlreadyVerified ? 0.7 : 1,
+            marginBottom: '16px',
+            textAlign: 'left',
             display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: '8px'
-          }}
-        >
-          {isAlreadyVerified ? <CheckCircle size={18} /> : <MapPin size={18} />}
-          {isAlreadyVerified ? 'Already Verified' : isVerifying ? 'Verifying...' : 'Submit PIN + Verify Location'}
-        </button>
+            gap: '10px',
+            alignItems: 'flex-start'
+          }}>
+            {statusTheme.icon}
+            <div>
+              <strong>{currentRecord.status || 'Verified'}</strong>
+              <p style={{margin: '4px 0 0', fontSize: '0.82rem'}}>
+                {currentRecord.fullName || user.name} - {formatMethodLabel(currentRecord.method)}
+                {Number.isFinite(currentRecord.distanceMeters) ? ` - ${currentRecord.distanceMeters}m from lecturer` : ''}
+              </p>
+            </div>
+          </div>
+        )}
+
+        <div className="student-action-grid">
+          <button
+            onClick={() => openScanner('gps')}
+            className="login-btn-final"
+            disabled={isVerifying}
+            style={{
+              background: '#006837',
+              padding: '14px',
+              borderRadius: '12px',
+              color: 'white',
+              border: 'none',
+              cursor: isVerifying ? 'not-allowed' : 'pointer',
+              opacity: isVerifying ? 0.7 : 1,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '8px'
+            }}
+          >
+            <ShieldCheck size={18} />
+            {isVerifying && scannerMode === 'gps' ? 'Verifying...' : 'Scan + GPS Verify'}
+          </button>
+
+          <button
+            onClick={() => openScanner('scan-only')}
+            className="login-btn-final"
+            disabled={isVerifying}
+            style={{
+              background: '#003366',
+              padding: '14px',
+              borderRadius: '12px',
+              color: 'white',
+              border: 'none',
+              cursor: isVerifying ? 'not-allowed' : 'pointer',
+              opacity: isVerifying ? 0.7 : 1,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '8px'
+            }}
+          >
+            <QrCode size={18} />
+            {isVerifying && scannerMode === 'scan-only' ? 'Submitting...' : 'Scan Only'}
+          </button>
+        </div>
+
+        {isScannerOpen && (
+          <div style={{
+            marginTop: '18px',
+            padding: '16px',
+            background: '#ffffff',
+            borderRadius: '16px',
+            border: '1px solid #e2e8f0',
+            boxShadow: '0 4px 12px rgba(0,0,0,0.08)'
+          }}>
+            <div style={{display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', color: '#003366', fontWeight: 800, marginBottom: '12px'}}>
+              <QrCode size={18} /> {scannerMode === 'gps' ? 'Scan QR for GPS Verification' : 'Scan QR for Lecturer Approval'}
+            </div>
+            <Scanner onResult={submitScannedAttendance} onClose={() => setIsScannerOpen(false)} />
+          </div>
+        )}
+
+        <div style={{
+          margin: '18px 0',
+          padding: '16px',
+          background: 'rgba(255,255,255,0.95)',
+          borderRadius: '16px',
+          border: '1px solid #e2e8f0',
+          boxShadow: '0 4px 12px rgba(0,0,0,0.08)',
+          textAlign: 'left'
+        }}>
+          <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', marginBottom: '12px'}}>
+            <div>
+              <h3 style={{color: '#003366', fontSize: '1rem', margin: 0}}>My Attendance Ledger</h3>
+              <p style={{color: '#64748b', fontSize: '0.8rem', margin: '3px 0 0'}}>Your recorded sessions across courses.</p>
+            </div>
+            <button
+              type="button"
+              onClick={loadStudentHistory}
+              disabled={isHistoryLoading}
+              style={{background: '#f8fafc', color: '#003366', border: '1px solid #dbeafe', borderRadius: '10px', padding: '8px 10px', fontWeight: 800, cursor: isHistoryLoading ? 'not-allowed' : 'pointer'}}
+            >
+              {isHistoryLoading ? 'Refreshing' : 'Refresh'}
+            </button>
+          </div>
+
+          <div className="student-status-grid" style={{marginBottom: '12px'}}>
+            <div style={{padding: '10px', borderRadius: '12px', background: '#f0fdf4', border: '1px solid #bbf7d0'}}>
+              <p style={{fontSize: '0.7rem', color: '#64748b', fontWeight: 800, textTransform: 'uppercase'}}>Verified</p>
+              <strong style={{color: '#166534', fontSize: '1.35rem'}}>{studentSummary.verified || 0}</strong>
+            </div>
+            <div style={{padding: '10px', borderRadius: '12px', background: '#fffbeb', border: '1px solid #fde68a'}}>
+              <p style={{fontSize: '0.7rem', color: '#64748b', fontWeight: 800, textTransform: 'uppercase'}}>Pending</p>
+              <strong style={{color: '#92400e', fontSize: '1.35rem'}}>{studentSummary.pending || 0}</strong>
+            </div>
+          </div>
+
+          <div style={{display: 'grid', gap: '8px', maxHeight: '230px', overflowY: 'auto', paddingRight: '2px'}}>
+            {studentHistory.slice(0, 8).map((record, index) => {
+              const theme = getRecordStatusTheme(record.status || 'Verified');
+
+              return (
+                <div key={`${record.sessionKey}-${index}`} style={{display: 'flex', justifyContent: 'space-between', gap: '10px', alignItems: 'center', padding: '10px', borderRadius: '12px', background: '#f8fafc', border: '1px solid #e2e8f0'}}>
+                  <div>
+                    <strong style={{color: '#003366'}}>{record.courseCode || 'Course'} {record.week ? `Week ${record.week}` : ''}</strong>
+                    <p style={{color: '#64748b', fontSize: '0.78rem', margin: '3px 0 0'}}>{record.dateTime || record.timeVerified || 'Recorded'}</p>
+                  </div>
+                  <span style={{background: theme.background, color: theme.color, border: theme.border, padding: '4px 10px', borderRadius: '999px', fontSize: '0.72rem', fontWeight: 800}}>
+                    {record.status || 'Verified'}
+                  </span>
+                </div>
+              );
+            })}
+            {!isHistoryLoading && studentHistory.length === 0 && (
+              <p style={{color: '#64748b', fontSize: '0.82rem', textAlign: 'center', margin: '10px 0'}}>No attendance records yet.</p>
+            )}
+          </div>
+        </div>
 
         <button
           onClick={onLogout}

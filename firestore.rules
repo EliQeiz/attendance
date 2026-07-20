@@ -140,9 +140,9 @@ service cloud.firestore {
       allow update: if isSessionLecturer(sessionId);
       allow delete: if false;
 
-      // The 4-digit PIN and lecturer GPS coordinate live here so students can
-      // never read them. Only the session lecturer (and the admin Cloud
-      // Function, which bypasses rules) can touch this document.
+      // The projected QR session code and lecturer GPS coordinate live here so
+      // students can never read or forge them. Only the session lecturer (and
+      // the admin Cloud Function, which bypasses rules) can touch this document.
       match /secure/{docId} {
         allow read, write: if isSessionLecturer(sessionId);
       }
@@ -153,9 +153,10 @@ service cloud.firestore {
         allow list: if isSessionLecturer(sessionId);
 
         // Student self-verification is handled exclusively by the
-        // submitAttendance Cloud Function (admin SDK), which validates the PIN,
-        // GPS proximity, and roster server-side. Students cannot write records
-        // directly. Lecturers retain manual create for corrections/fallback.
+        // submitAttendance Cloud Function (admin SDK), which validates the QR
+        // session code, GPS proximity, roster membership, and device uniqueness
+        // server-side. Students cannot write records directly. Lecturers retain
+        // manual create/update for corrections and scan-only approvals.
         allow create: if isSessionLecturer(sessionId);
         allow update, delete: if isSessionLecturer(sessionId);
       }
