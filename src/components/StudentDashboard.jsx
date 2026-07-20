@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
-import { AlertCircle, CheckCircle, Clock, LogOut, MapPin, QrCode, ShieldCheck } from 'lucide-react';
+import { AlertCircle, CheckCircle, Clock, LogOut, MapPin, QrCode, RefreshCw, ShieldCheck } from 'lucide-react';
 import { db, functions } from '../firebase';
 import {
   collection,
@@ -66,33 +66,6 @@ const parseLecturerQrPayload = (decodedText) => {
   };
 };
 
-const getRecordStatusTheme = (status) => {
-  if (status === 'Verified') {
-    return {
-      background: '#dcfce7',
-      color: '#166534',
-      border: '1px solid #bbf7d0',
-      icon: <CheckCircle size={16} />
-    };
-  }
-
-  if (status === 'Pending') {
-    return {
-      background: '#fffbeb',
-      color: '#92400e',
-      border: '1px solid #fde68a',
-      icon: <Clock size={16} />
-    };
-  }
-
-  return {
-    background: '#fee2e2',
-    color: '#991b1b',
-    border: '1px solid #fecaca',
-    icon: <AlertCircle size={16} />
-  };
-};
-
 const formatMethodLabel = (method = '') => ({
   QR_GPS: 'QR + GPS',
   QR_SCAN_PENDING: 'QR Scan Pending',
@@ -100,6 +73,19 @@ const formatMethodLabel = (method = '') => ({
   LECTURER_DENIED_SCAN: 'Lecturer Denied',
   LECTURER_MANUAL: 'Lecturer Manual'
 }[method] || method || 'QR Attendance');
+
+const getStatusTone = (status = 'Verified') => {
+  if (status === 'Verified') return 'verified';
+  if (status === 'Pending') return 'pending';
+  if (status === 'Denied') return 'denied';
+  return 'absent';
+};
+
+const getStatusIcon = (status = 'Verified') => {
+  if (status === 'Verified') return <CheckCircle size={16} />;
+  if (status === 'Pending') return <Clock size={16} />;
+  return <AlertCircle size={16} />;
+};
 
 export default function StudentDashboard({ user, onLogout }) {
   const [activeSessions, setActiveSessions] = useState([]);
@@ -247,8 +233,6 @@ export default function StudentDashboard({ user, onLogout }) {
     }
   };
 
-  const statusTheme = currentRecord ? getRecordStatusTheme(currentRecord.status || 'Verified') : null;
-
   return (
     <div className="knust-login-page">
       <MotionDiv
@@ -257,120 +241,72 @@ export default function StudentDashboard({ user, onLogout }) {
         animate={{ opacity: 1, y: 0, scale: 1 }}
         transition={{ duration: 0.45, ease: 'easeOut' }}
       >
-        <img
-          src="https://images.seeklogo.com/logo-png/35/2/kwame-nkrumah-university-of-science-technology-logo-png_seeklogo-350387.png"
-          alt="KNUST Logo"
-          style={{ width: '60px', height: 'auto', marginBottom: '15px' }}
-        />
+        <div className="brand-lockup">
+          <img
+            src="https://images.seeklogo.com/logo-png/35/2/kwame-nkrumah-university-of-science-technology-logo-png_seeklogo-350387.png"
+            alt="KNUST Logo"
+            className="login-logo"
+          />
+          <p className="aura-eyebrow">Student Suite</p>
+        </div>
 
-        <h2 style={{color: '#003366', fontSize: '1.4rem', marginBottom: '5px'}}>
-          Welcome, {user.name}
-        </h2>
-        <p style={{color: '#64748b', marginBottom: '18px'}}>ID: {studentId}</p>
+        <section className="student-header">
+          <h2>Welcome, <span className="gradient-text">{user.name}</span></h2>
+          <p>ID: {studentId}</p>
+        </section>
 
-        <div style={{
-          margin: '20px 0',
-          padding: '20px',
-          background: 'rgba(255,255,255,0.95)',
-          borderRadius: '16px',
-          border: '1px solid #e2e8f0',
-          boxShadow: '0 4px 12px rgba(0,0,0,0.08)',
-          textAlign: 'left'
-        }}>
-          <div style={{display: 'flex', gap: '12px', alignItems: 'center', marginBottom: '14px'}}>
-            <QrCode size={30} color="#003366" />
+        <section className="suite-panel">
+          <div className="suite-panel-header">
+            <div className="suite-icon"><QrCode size={22} /></div>
             <div>
-              <h3 style={{color: '#003366', fontSize: '1rem', margin: 0}}>Lecturer QR Attendance</h3>
-              <p style={{color: '#64748b', fontSize: '0.8rem', margin: 0}}>Scan the projected lecturer QR code to verify this class.</p>
+              <h3>Lecturer QR Attendance</h3>
+              <p>Scan the projected lecturer QR code to verify this class.</p>
             </div>
           </div>
 
           <div className="student-status-grid">
-            <div style={{padding: '12px', borderRadius: '12px', background: activeSessions.length ? '#f0fdf4' : '#f8fafc', border: activeSessions.length ? '1px solid #bbf7d0' : '1px solid #e2e8f0'}}>
-              <p style={{fontSize: '0.72rem', color: '#64748b', fontWeight: 800, textTransform: 'uppercase'}}>Active QR Sessions</p>
-              <strong style={{color: activeSessions.length ? '#166534' : '#64748b', fontSize: '1.4rem'}}>{activeSessions.length}</strong>
+            <div className={`metric-card ${activeSessions.length ? 'success' : ''}`}>
+              <p className="metric-label">Active QR Sessions</p>
+              <strong className="metric-value">{activeSessions.length}</strong>
             </div>
-            <div style={{padding: '12px', borderRadius: '12px', background: '#eff6ff', border: '1px solid #bfdbfe'}}>
-              <p style={{fontSize: '0.72rem', color: '#64748b', fontWeight: 800, textTransform: 'uppercase'}}>GPS Radius</p>
-              <strong style={{color: '#003366', fontSize: '1.4rem'}}>{LOCATION_THRESHOLD_METERS}m</strong>
+            <div className="metric-card info">
+              <p className="metric-label">GPS Radius</p>
+              <strong className="metric-value">{LOCATION_THRESHOLD_METERS}m</strong>
             </div>
           </div>
 
-          <p style={{color: '#64748b', fontSize: '0.82rem', margin: '14px 0 0', lineHeight: 1.5}}>
+          <p className="panel-copy">
             GPS verification gives immediate confirmation. If your phone blocks location, use scan-only and wait while the lecturer confirms you are in class.
           </p>
-        </div>
+        </section>
 
         {latestCourseLabel && (
-          <div style={{
-            padding: '12px',
-            borderRadius: '12px',
-            background: '#f8fafc',
-            color: '#003366',
-            border: '1px solid #e2e8f0',
-            fontSize: '0.85rem',
-            fontWeight: 700,
-            marginBottom: '15px'
-          }}>
-            Current context: {latestCourseLabel}
+          <div className="notice-card info">
+            <MapPin size={16} />
+            <span>Current context: {latestCourseLabel}</span>
           </div>
         )}
 
         {error && (
-          <div style={{
-            background: '#fee2e2',
-            color: '#dc2626',
-            padding: '10px',
-            borderRadius: '8px',
-            marginBottom: '15px',
-            fontSize: '0.85rem',
-            border: '1px solid #fecaca',
-            textAlign: 'center',
-            fontWeight: '500',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: '8px'
-          }}>
-            <AlertCircle size={16} /> {error}
+          <div className="notice-card error">
+            <AlertCircle size={16} />
+            <span>{error}</span>
           </div>
         )}
 
         {status && (
-          <div style={{
-            background: status.includes('Waiting') || status.includes('approval') ? '#fffbeb' : '#eff6ff',
-            color: status.includes('Waiting') || status.includes('approval') ? '#92400e' : '#1d4ed8',
-            padding: '10px',
-            borderRadius: '8px',
-            marginBottom: '15px',
-            fontSize: '0.85rem',
-            border: status.includes('Waiting') || status.includes('approval') ? '1px solid #fde68a' : '1px solid #bfdbfe',
-            textAlign: 'center',
-            fontWeight: '500',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: '8px'
-          }}>
-            {status.includes('Waiting') || status.includes('approval') ? <Clock size={16} /> : <MapPin size={16} />} {status}
+          <div className={`notice-card ${status.includes('Waiting') || status.includes('approval') ? 'warning' : 'info'}`}>
+            {status.includes('Waiting') || status.includes('approval') ? <Clock size={16} /> : <MapPin size={16} />}
+            <span>{status}</span>
           </div>
         )}
 
-        {currentRecord && statusTheme && (
-          <div style={{
-            ...statusTheme,
-            padding: '12px',
-            borderRadius: '12px',
-            marginBottom: '16px',
-            textAlign: 'left',
-            display: 'flex',
-            gap: '10px',
-            alignItems: 'flex-start'
-          }}>
-            {statusTheme.icon}
+        {currentRecord && (
+          <div className={`record-card status-pill ${getStatusTone(currentRecord.status)}`}>
+            {getStatusIcon(currentRecord.status)}
             <div>
               <strong>{currentRecord.status || 'Verified'}</strong>
-              <p style={{margin: '4px 0 0', fontSize: '0.82rem'}}>
+              <p>
                 {currentRecord.fullName || user.name} - {formatMethodLabel(currentRecord.method)}
                 {Number.isFinite(currentRecord.distanceMeters) ? ` - ${currentRecord.distanceMeters}m from lecturer` : ''}
               </p>
@@ -383,19 +319,6 @@ export default function StudentDashboard({ user, onLogout }) {
             onClick={() => openScanner('gps')}
             className="login-btn-final"
             disabled={isVerifying}
-            style={{
-              background: '#006837',
-              padding: '14px',
-              borderRadius: '12px',
-              color: 'white',
-              border: 'none',
-              cursor: isVerifying ? 'not-allowed' : 'pointer',
-              opacity: isVerifying ? 0.7 : 1,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: '8px'
-            }}
           >
             <ShieldCheck size={18} />
             {isVerifying && scannerMode === 'gps' ? 'Verifying...' : 'Scan + GPS Verify'}
@@ -405,19 +328,6 @@ export default function StudentDashboard({ user, onLogout }) {
             onClick={() => openScanner('scan-only')}
             className="login-btn-final"
             disabled={isVerifying}
-            style={{
-              background: '#003366',
-              padding: '14px',
-              borderRadius: '12px',
-              color: 'white',
-              border: 'none',
-              cursor: isVerifying ? 'not-allowed' : 'pointer',
-              opacity: isVerifying ? 0.7 : 1,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: '8px'
-            }}
           >
             <QrCode size={18} />
             {isVerifying && scannerMode === 'scan-only' ? 'Submitting...' : 'Scan Only'}
@@ -425,83 +335,67 @@ export default function StudentDashboard({ user, onLogout }) {
         </div>
 
         {isScannerOpen && (
-          <div style={{
-            marginTop: '18px',
-            padding: '16px',
-            background: '#ffffff',
-            borderRadius: '16px',
-            border: '1px solid #e2e8f0',
-            boxShadow: '0 4px 12px rgba(0,0,0,0.08)'
-          }}>
-            <div style={{display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', color: '#003366', fontWeight: 800, marginBottom: '12px'}}>
-              <QrCode size={18} /> {scannerMode === 'gps' ? 'Scan QR for GPS Verification' : 'Scan QR for Lecturer Approval'}
+          <section className="suite-panel">
+            <div className="suite-panel-header">
+              <div className="suite-icon"><QrCode size={20} /></div>
+              <div>
+                <h3>{scannerMode === 'gps' ? 'Scan QR for GPS Verification' : 'Scan QR for Lecturer Approval'}</h3>
+                <p>{scannerMode === 'gps' ? 'Keep location enabled while the QR is processed.' : 'Your scan will enter the lecturer approval queue.'}</p>
+              </div>
             </div>
             <Scanner onResult={submitScannedAttendance} onClose={() => setIsScannerOpen(false)} />
-          </div>
+          </section>
         )}
 
-        <div style={{
-          margin: '18px 0',
-          padding: '16px',
-          background: 'rgba(255,255,255,0.95)',
-          borderRadius: '16px',
-          border: '1px solid #e2e8f0',
-          boxShadow: '0 4px 12px rgba(0,0,0,0.08)',
-          textAlign: 'left'
-        }}>
-          <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', marginBottom: '12px'}}>
+        <section className="suite-panel">
+          <div className="suite-panel-header">
+            <div className="suite-icon"><Clock size={20} /></div>
             <div>
-              <h3 style={{color: '#003366', fontSize: '1rem', margin: 0}}>My Attendance Ledger</h3>
-              <p style={{color: '#64748b', fontSize: '0.8rem', margin: '3px 0 0'}}>Your recorded sessions across courses.</p>
+              <h3>My Attendance Ledger</h3>
+              <p>Your recorded sessions across courses.</p>
             </div>
             <button
               type="button"
               onClick={loadStudentHistory}
               disabled={isHistoryLoading}
-              style={{background: '#f8fafc', color: '#003366', border: '1px solid #dbeafe', borderRadius: '10px', padding: '8px 10px', fontWeight: 800, cursor: isHistoryLoading ? 'not-allowed' : 'pointer'}}
+              className="mini-action-btn present"
+              aria-label="Refresh attendance ledger"
             >
+              <RefreshCw size={15} />
               {isHistoryLoading ? 'Refreshing' : 'Refresh'}
             </button>
           </div>
 
-          <div className="student-status-grid" style={{marginBottom: '12px'}}>
-            <div style={{padding: '10px', borderRadius: '12px', background: '#f0fdf4', border: '1px solid #bbf7d0'}}>
-              <p style={{fontSize: '0.7rem', color: '#64748b', fontWeight: 800, textTransform: 'uppercase'}}>Verified</p>
-              <strong style={{color: '#166534', fontSize: '1.35rem'}}>{studentSummary.verified || 0}</strong>
+          <div className="student-status-grid">
+            <div className="metric-card success">
+              <p className="metric-label">Verified</p>
+              <strong className="metric-value">{studentSummary.verified || 0}</strong>
             </div>
-            <div style={{padding: '10px', borderRadius: '12px', background: '#fffbeb', border: '1px solid #fde68a'}}>
-              <p style={{fontSize: '0.7rem', color: '#64748b', fontWeight: 800, textTransform: 'uppercase'}}>Pending</p>
-              <strong style={{color: '#92400e', fontSize: '1.35rem'}}>{studentSummary.pending || 0}</strong>
+            <div className="metric-card warning">
+              <p className="metric-label">Pending</p>
+              <strong className="metric-value">{studentSummary.pending || 0}</strong>
             </div>
           </div>
 
-          <div style={{display: 'grid', gap: '8px', maxHeight: '230px', overflowY: 'auto', paddingRight: '2px'}}>
-            {studentHistory.slice(0, 8).map((record, index) => {
-              const theme = getRecordStatusTheme(record.status || 'Verified');
-
-              return (
-                <div key={`${record.sessionKey}-${index}`} style={{display: 'flex', justifyContent: 'space-between', gap: '10px', alignItems: 'center', padding: '10px', borderRadius: '12px', background: '#f8fafc', border: '1px solid #e2e8f0'}}>
-                  <div>
-                    <strong style={{color: '#003366'}}>{record.courseCode || 'Course'} {record.week ? `Week ${record.week}` : ''}</strong>
-                    <p style={{color: '#64748b', fontSize: '0.78rem', margin: '3px 0 0'}}>{record.dateTime || record.timeVerified || 'Recorded'}</p>
-                  </div>
-                  <span style={{background: theme.background, color: theme.color, border: theme.border, padding: '4px 10px', borderRadius: '999px', fontSize: '0.72rem', fontWeight: 800}}>
-                    {record.status || 'Verified'}
-                  </span>
+          <div className="history-list">
+            {studentHistory.slice(0, 8).map((record, index) => (
+              <div key={`${record.sessionKey}-${index}`} className="history-row">
+                <div>
+                  <strong>{record.courseCode || 'Course'} {record.week ? `Week ${record.week}` : ''}</strong>
+                  <p>{record.dateTime || record.timeVerified || 'Recorded'}</p>
                 </div>
-              );
-            })}
+                <span className={`status-pill ${getStatusTone(record.status)}`}>
+                  {record.status || 'Verified'}
+                </span>
+              </div>
+            ))}
             {!isHistoryLoading && studentHistory.length === 0 && (
-              <p style={{color: '#64748b', fontSize: '0.82rem', textAlign: 'center', margin: '10px 0'}}>No attendance records yet.</p>
+              <p className="empty-state">No attendance records yet.</p>
             )}
           </div>
-        </div>
+        </section>
 
-        <button
-          onClick={onLogout}
-          className="login-btn-final"
-          style={{background: '#64748b', width: '100%', padding: '12px', borderRadius: '10px', color: 'white', border: 'none', cursor: 'pointer', marginTop: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px'}}
-        >
+        <button onClick={onLogout} className="login-btn-final">
           <LogOut size={16} /> Logout
         </button>
       </MotionDiv>

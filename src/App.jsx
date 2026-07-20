@@ -10,18 +10,15 @@ const StudentDashboard = lazy(() => import('./components/StudentDashboard'));
 
 function FullScreenLoader() {
   return (
-    <div style={{
-      height: '100vh',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      background: '#f8fafc'
-    }}>
-      <img
-        src="https://images.seeklogo.com/logo-png/35/2/kwame-nkrumah-university-of-science-technology-logo-png_seeklogo-350387.png"
-        style={{ width: '80px', opacity: 0.6 }}
-        alt="Loading..."
-      />
+    <div className="knust-login-page">
+      <div className="login-glass-card loader-card">
+        <img
+          src="https://images.seeklogo.com/logo-png/35/2/kwame-nkrumah-university-of-science-technology-logo-png_seeklogo-350387.png"
+          className="login-logo"
+          alt="Loading..."
+        />
+        <p className="aura-eyebrow loader-eyebrow">Preparing Workspace</p>
+      </div>
     </div>
   );
 }

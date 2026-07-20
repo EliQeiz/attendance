@@ -104,22 +104,16 @@ export default function Scanner({ onResult, onClose }) {
   };
 
   return (
-    <div className="scanner-root" style={{ minHeight: '360px' }}>
+    <div className="scanner-root">
       {error && (
-        <div style={{ background: '#fee2e2', color: '#b91c1c', padding: '10px', borderRadius: '8px', marginBottom: '10px', fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <div className="notice-card error scanner-alert">
           <AlertCircle size={16} /> {error}
         </div>
       )}
 
       <div
         id={readerId}
-        style={{
-          display: isCameraMode ? 'block' : 'none',
-          width: '100%',
-          borderRadius: '12px',
-          overflow: 'hidden',
-          background: '#000'
-        }}
+        className={`scanner-camera-frame ${isCameraMode ? 'is-active' : ''}`}
       />
 
       {!isCameraMode && (
@@ -127,41 +121,34 @@ export default function Scanner({ onResult, onClose }) {
           onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
           onDragLeave={() => setIsDragging(false)}
           onDrop={(e) => { e.preventDefault(); setIsDragging(false); handleFile(e.dataTransfer.files[0]); }}
-          style={{
-            border: '2px dashed #006837',
-            borderRadius: '16px',
-            padding: '48px 20px',
-            background: isDragging ? '#f0fdf4' : '#fff',
-            textAlign: 'center',
-            position: 'relative'
-          }}
+          className={`scanner-dropzone ${isDragging ? 'is-dragging' : ''}`}
         >
-          <Upload size={40} color="#006837" style={{ marginBottom: '10px', opacity: 0.6 }} />
-          <p style={{ fontWeight: '600', color: '#1e293b' }}>Drop QR Code Here</p>
-          <p style={{ fontSize: '0.8rem', color: '#64748b' }}>or click to select file</p>
+          <Upload size={40} />
+          <p>Drop QR Code Here</p>
+          <span>or click to select file</span>
           <input
             type="file"
             accept="image/*"
             onChange={(e) => handleFile(e.target.files[0])}
-            style={{ position: 'absolute', inset: 0, opacity: 0, cursor: 'pointer' }}
+            className="scanner-file-input"
           />
         </div>
       )}
 
-      <div style={{ marginTop: '20px', display: 'flex', justifyContent: 'center', gap: '10px', flexWrap: 'wrap' }}>
+      <div className="scanner-actions">
         {!isCameraMode ? (
-          <button onClick={startCamera} className="toggle-btn camera" style={{display: 'flex', alignItems: 'center', gap: '8px'}}>
+          <button onClick={startCamera} className="toggle-btn camera">
             <Camera size={18} /> Use Camera
           </button>
         ) : (
-          <button onClick={stopCamera} className="toggle-btn file" style={{display: 'flex', alignItems: 'center', gap: '8px'}}>
+          <button onClick={stopCamera} className="toggle-btn file">
             <RefreshCw size={18} /> Stop Camera
           </button>
         )}
       </div>
 
       {onClose && (
-        <button onClick={onClose} style={{ marginTop: '18px', background: 'none', border: 'none', color: '#be123c', cursor: 'pointer', width: '100%', textDecoration: 'underline' }}>
+        <button onClick={onClose} className="scanner-close-btn">
           Close scanner
         </button>
       )}

@@ -1628,16 +1628,8 @@ export default function LecturerDashboard({ user, onLogout }) {
               </div>
 
               {rosterStatus && (
-                <div style={{
-                  marginTop: '16px',
-                  padding: '12px',
-                  borderRadius: '12px',
-                  background: rosterStatus.startsWith('Imported') ? '#f0fdf4' : '#fffbeb',
-                  color: rosterStatus.startsWith('Imported') ? '#166534' : '#92400e',
-                  border: rosterStatus.startsWith('Imported') ? '1px solid #bbf7d0' : '1px solid #fde68a',
-                  fontSize: '0.88rem',
-                  fontWeight: 600
-                }}>
+                <div className={`notice-card roster-notice ${rosterStatus.startsWith('Imported') ? 'success' : 'warning'}`}>
+                  {rosterStatus.startsWith('Imported') ? <CheckCircle size={16} /> : <AlertCircle size={16} />}
                   {rosterStatus}
                 </div>
               )}
@@ -1724,17 +1716,7 @@ export default function LecturerDashboard({ user, onLogout }) {
               )}
 
               {bleStatus && (
-                <div style={{
-                  marginTop: '18px',
-                  padding: '12px',
-                  borderRadius: '12px',
-                  display: 'flex',
-                  gap: '10px',
-                  alignItems: 'flex-start',
-                  background: activeSession?.active ? '#f0fdf4' : '#fffbeb',
-                  color: activeSession?.active ? '#166534' : '#92400e',
-                  border: activeSession?.active ? '1px solid #bbf7d0' : '1px solid #fde68a'
-                }}>
+                <div className={`notice-card session-notice ${activeSession?.active ? 'success' : 'warning'}`}>
                   {activeSession?.active ? <CheckCircle size={18} /> : <AlertCircle size={18} />}
                   <span style={{fontSize: '0.88rem', fontWeight: 600}}>{bleStatus}</span>
                 </div>
@@ -1793,16 +1775,8 @@ export default function LecturerDashboard({ user, onLogout }) {
                   <UserPlus size={18} /> Verify Present
                 </button>
                 {manualVerificationLookupStatus && (
-                  <div style={{
-                    gridColumn: '1 / -1',
-                    padding: '10px 12px',
-                    borderRadius: '12px',
-                    background: manualVerificationStudent ? '#f0fdf4' : '#fffbeb',
-                    color: manualVerificationStudent ? '#166534' : '#92400e',
-                    border: manualVerificationStudent ? '1px solid #bbf7d0' : '1px solid #fde68a',
-                    fontSize: '0.84rem',
-                    fontWeight: 700
-                  }}>
+                  <div className={`notice-card manual-lookup-notice ${manualVerificationStudent ? 'success' : 'warning'}`}>
+                    {manualVerificationStudent ? <CheckCircle size={16} /> : <AlertCircle size={16} />}
                     {manualVerificationLookupStatus}
                   </div>
                 )}
@@ -1916,16 +1890,8 @@ export default function LecturerDashboard({ user, onLogout }) {
               </div>
 
               {correctionStatus && (
-                <div style={{
-                  margin: '16px 20px',
-                  padding: '12px',
-                  borderRadius: '12px',
-                  background: correctionStatus.includes('Unable') ? '#fee2e2' : '#f0fdf4',
-                  color: correctionStatus.includes('Unable') ? '#b91c1c' : '#166534',
-                  border: correctionStatus.includes('Unable') ? '1px solid #fecaca' : '1px solid #bbf7d0',
-                  fontSize: '0.88rem',
-                  fontWeight: 700
-                }}>
+                <div className={`notice-card correction-notice ${correctionStatus.includes('Unable') ? 'error' : 'success'}`}>
+                  {correctionStatus.includes('Unable') ? <AlertCircle size={16} /> : <CheckCircle size={16} />}
                   {correctionStatus}
                 </div>
               )}

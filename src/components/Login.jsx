@@ -223,21 +223,28 @@ export default function Login({ onLogin }) {
   return (
     <div className="knust-login-page">
       <MotionDiv
-        className="login-glass-card"
+        className="login-glass-card auth-card"
         initial={{ opacity: 0, y: 18, scale: 0.98 }}
         animate={{ opacity: 1, y: 0, scale: 1 }}
         transition={{ duration: 0.45, ease: 'easeOut' }}
       >
-        <img
-          src="https://images.seeklogo.com/logo-png/35/2/kwame-nkrumah-university-of-science-technology-logo-png_seeklogo-350387.png"
-          alt="KNUST Logo"
-          style={{ width: '80px', height: 'auto', marginBottom: '15px' }}
-        />
-        <h1 style={{color: '#003366', fontSize: '1.5rem'}}>KNUST Attendance</h1>
-        <p style={{color: '#64748b', marginBottom: '20px'}}>{isReset ? 'Recover Your Account' : 'Secure Portal Access'}</p>
+        <div className="brand-lockup">
+          <img
+            src="https://images.seeklogo.com/logo-png/35/2/kwame-nkrumah-university-of-science-technology-logo-png_seeklogo-350387.png"
+            alt="KNUST Logo"
+            className="login-logo"
+          />
+          <p className="aura-eyebrow">{isReset ? 'Account Recovery' : 'Secure Portal'}</p>
+          <h1 className="login-title">KNUST <span>Attendance</span></h1>
+          <p className="login-subtitle">
+            {isReset
+              ? 'Recover access with the email connected to your student or lecturer account.'
+              : 'A polished attendance command center for lecturer sessions, QR verification, GPS proximity, and semester records.'}
+          </p>
+        </div>
 
         {!isReset && (
-          <div className="auth-mode-toggle" style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '16px'}}>
+          <div className="auth-mode-toggle">
             <button
               type="button"
               className={mode === 'signin' ? 'active' : ''}
@@ -256,33 +263,13 @@ export default function Login({ onLogin }) {
         )}
 
         {error && (
-          <div style={{
-            background: '#fee2e2',
-            color: '#dc2626',
-            padding: '10px',
-            borderRadius: '8px',
-            marginBottom: '15px',
-            fontSize: '0.85rem',
-            border: '1px solid #fecaca',
-            textAlign: 'center',
-            fontWeight: '500'
-          }}>
+          <div className="auth-alert error">
             {error}
           </div>
         )}
 
         {status && (
-          <div style={{
-            background: '#dcfce7',
-            color: '#166534',
-            padding: '10px',
-            borderRadius: '8px',
-            marginBottom: '15px',
-            fontSize: '0.85rem',
-            border: '1px solid #bbf7d0',
-            textAlign: 'center',
-            fontWeight: '500'
-          }}>
+          <div className="auth-alert success">
             {status}
           </div>
         )}
@@ -372,20 +359,8 @@ export default function Login({ onLogin }) {
 
           <button
             type="submit"
-            className="login-btn-final"
+            className="login-btn-final login-submit"
             disabled={isSubmitting}
-            style={{
-              width: '100%',
-              padding: '14px',
-              background: '#006837',
-              color: 'white',
-              border: 'none',
-              borderRadius: '12px',
-              fontWeight: 'bold',
-              cursor: isSubmitting ? 'not-allowed' : 'pointer',
-              marginTop: '10px',
-              opacity: isSubmitting ? 0.75 : 1
-            }}
           >
             {isSubmitting ? 'Please Wait...' : isReset ? 'Send Reset Link' : isSignup ? 'Create Account' : 'Sign In'}
           </button>
@@ -397,7 +372,7 @@ export default function Login({ onLogin }) {
               setError('');
               setStatus('');
             }}
-            style={{background: 'none', border: 'none', color: '#003366', cursor: 'pointer', marginTop: '12px', fontWeight: 700}}
+            className="text-button"
           >
             {isReset ? 'Back to Sign In' : 'Forgot Password?'}
           </button>

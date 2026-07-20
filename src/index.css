@@ -4,8 +4,15 @@
   box-sizing: border-box;
 }
 
+html,
 body {
+  min-width: 320px;
+  min-height: 100%;
   font-family: 'Inter', -apple-system, sans-serif;
-  background-color: #f1f5f9;
-  color: #003366;
+  background: #050713;
+  color: #f8fbff;
+}
+
+#root {
+  min-height: 100vh;
 }
