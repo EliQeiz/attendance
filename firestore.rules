@@ -67,6 +67,22 @@ service cloud.firestore {
         && request.resource.data.role in ['student', 'lecturer'];
     }
 
+    function validProfileUpdate(uid) {
+      return signedIn()
+        && request.auth.uid == uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'name',
+          'phone',
+          'department',
+          'programme',
+          'level',
+          'bio',
+          'photoURL',
+          'updatedAt'
+        ])
+        && request.resource.data.name is string;
+    }
+
     match /lecturerApprovals/{lecturerId} {
       allow read, write: if false;
     }
@@ -87,11 +103,7 @@ service cloud.firestore {
       allow get: if signedIn() && (request.auth.uid == uid || isLecturer());
       allow list: if isLecturer();
 
-      allow update: if signedIn()
-        && request.auth.uid == uid
-        && request.resource.data.role == resource.data.role
-        && request.resource.data.knust_id == resource.data.knust_id
-        && request.resource.data.login_id == resource.data.login_id;
+      allow update: if validProfileUpdate(uid);
 
       allow delete: if false;
     }

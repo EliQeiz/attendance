@@ -3,13 +3,13 @@
   --knust-green: #18c8ff;
   --knust-yellow: #8b5cf6;
   --aura-ink: #050713;
-  --aura-void: #08091a;
-  --aura-navy: #101335;
-  --aura-panel: rgba(12, 16, 42, 0.78);
-  --aura-panel-strong: rgba(16, 21, 54, 0.92);
-  --aura-panel-soft: rgba(255, 255, 255, 0.07);
-  --aura-border: rgba(164, 178, 255, 0.18);
-  --aura-border-strong: rgba(30, 203, 255, 0.34);
+  --aura-void: #070a19;
+  --aura-navy: #0d1537;
+  --aura-panel: rgba(14, 24, 55, 0.74);
+  --aura-panel-strong: rgba(18, 30, 68, 0.92);
+  --aura-panel-soft: rgba(255, 255, 255, 0.085);
+  --aura-border: rgba(137, 184, 255, 0.24);
+  --aura-border-strong: rgba(72, 201, 255, 0.42);
   --aura-cyan: #19c8ff;
   --aura-blue: #5b6cff;
   --aura-purple: #8b5cf6;
@@ -22,9 +22,9 @@
   --aura-subtle: #727da3;
   --sidebar-width: 288px;
   --bg-main:
-    linear-gradient(135deg, rgba(91, 108, 255, 0.18), transparent 28%),
-    linear-gradient(250deg, rgba(25, 200, 255, 0.18), transparent 34%),
-    linear-gradient(180deg, #08091a 0%, #050713 52%, #071320 100%);
+    linear-gradient(122deg, rgba(91, 108, 255, 0.34) 0%, rgba(9, 13, 38, 0.04) 32%, transparent 64%),
+    linear-gradient(248deg, rgba(25, 200, 255, 0.28) 0%, rgba(6, 36, 56, 0.1) 36%, transparent 70%),
+    linear-gradient(178deg, #101743 0%, #070a19 42%, #062437 100%);
   --card-bg: var(--aura-panel);
   --text-main: var(--aura-text);
   --text-muted: var(--aura-muted);
@@ -33,9 +33,9 @@
 
 .dark-theme {
   --bg-main:
-    linear-gradient(135deg, rgba(139, 92, 246, 0.2), transparent 28%),
-    linear-gradient(250deg, rgba(25, 200, 255, 0.2), transparent 34%),
-    linear-gradient(180deg, #08091a 0%, #050713 52%, #071320 100%);
+    linear-gradient(126deg, rgba(139, 92, 246, 0.32) 0%, rgba(8, 9, 26, 0.02) 34%, transparent 66%),
+    linear-gradient(250deg, rgba(25, 200, 255, 0.25) 0%, rgba(6, 36, 56, 0.12) 38%, transparent 72%),
+    linear-gradient(180deg, #0f1233 0%, #050713 52%, #071320 100%);
   --card-bg: var(--aura-panel);
   --text-main: var(--aura-text);
   --text-muted: var(--aura-muted);
@@ -90,10 +90,12 @@ button {
   inset: 0;
   z-index: -2;
   background:
-    linear-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+    linear-gradient(105deg, rgba(91, 108, 255, 0.16) 0%, transparent 31%),
+    linear-gradient(255deg, rgba(25, 200, 255, 0.13) 0%, transparent 38%),
+    linear-gradient(rgba(255, 255, 255, 0.007) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.006) 1px, transparent 1px),
     var(--bg-main);
-  background-size: 72px 72px, 72px 72px, auto;
+  background-size: auto, auto, 96px 96px, 96px 96px, auto;
 }
 
 .knust-login-page::after,
@@ -104,9 +106,9 @@ button {
   z-index: -1;
   pointer-events: none;
   background:
-    linear-gradient(115deg, rgba(91, 108, 255, 0.22), transparent 26%),
-    linear-gradient(292deg, rgba(25, 200, 255, 0.2), transparent 31%),
-    linear-gradient(180deg, rgba(5, 7, 19, 0.12), rgba(5, 7, 19, 0.74));
+    linear-gradient(118deg, rgba(139, 92, 246, 0.13), transparent 38%),
+    linear-gradient(292deg, rgba(25, 200, 255, 0.14), transparent 46%),
+    linear-gradient(180deg, rgba(5, 7, 19, 0.02), rgba(5, 7, 19, 0.48));
 }
 
 .knust-login-page {
@@ -124,10 +126,10 @@ button {
   border: 1px solid var(--aura-border);
   border-radius: 8px;
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.11), rgba(255, 255, 255, 0.045)),
-    rgba(9, 11, 31, 0.82);
-  box-shadow: 0 28px 80px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.12);
-  backdrop-filter: blur(22px);
+    linear-gradient(180deg, rgba(255, 255, 255, 0.135), rgba(255, 255, 255, 0.055)),
+    rgba(9, 16, 38, 0.84);
+  box-shadow: 0 28px 80px rgba(2, 7, 24, 0.52), 0 0 0 1px rgba(25, 200, 255, 0.06), inset 0 1px 0 rgba(255, 255, 255, 0.14);
+  backdrop-filter: blur(24px) saturate(1.18);
   text-align: center;
 }
 
@@ -1294,6 +1296,224 @@ button {
   text-align: center;
 }
 
+.profile-admin-panel {
+  grid-column: 1 / -1;
+}
+
+.profile-panel {
+  display: grid;
+  gap: 15px;
+}
+
+.profile-identity {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.profile-avatar {
+  width: 68px;
+  height: 68px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid rgba(25, 200, 255, 0.34);
+  border-radius: 8px;
+  background:
+    linear-gradient(135deg, rgba(91, 108, 255, 0.48), rgba(25, 200, 255, 0.2)),
+    rgba(255, 255, 255, 0.08);
+  box-shadow: 0 18px 40px rgba(25, 200, 255, 0.12);
+}
+
+.profile-avatar img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+}
+
+.profile-avatar span {
+  color: #ffffff;
+  font-size: 1.35rem;
+  font-weight: 950;
+}
+
+.profile-identity h3 {
+  color: var(--aura-text);
+  font-size: clamp(1.2rem, 3vw, 1.6rem);
+  font-weight: 950;
+  line-height: 1.1;
+}
+
+.profile-identity p:last-child {
+  margin-top: 4px;
+}
+
+.profile-upload-btn {
+  position: relative;
+  overflow: hidden;
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.profile-upload-btn input {
+  position: absolute;
+  inset: 0;
+  cursor: pointer;
+  opacity: 0;
+}
+
+.profile-upload-btn:has(input:disabled) {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.profile-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.profile-notice {
+  margin: 0;
+}
+
+.profile-meta-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  color: var(--aura-muted);
+  font-size: 0.8rem;
+  font-weight: 760;
+}
+
+.profile-meta-row span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.profile-save-btn {
+  width: 100%;
+}
+
+.analytics-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 0.92fr) minmax(0, 1.08fr);
+  gap: 16px;
+  margin: 18px 0 22px;
+}
+
+.student-analytics-grid {
+  grid-template-columns: minmax(0, 0.82fr) minmax(0, 1.18fr);
+}
+
+.chart-card {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.chart-card-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.chart-card-header h3 {
+  color: var(--aura-text);
+  font-size: clamp(1rem, 2.2vw, 1.25rem);
+  font-weight: 950;
+}
+
+.chart-card-header p {
+  margin-top: 4px;
+  line-height: 1.5;
+}
+
+.chart-shell {
+  width: 100%;
+  height: clamp(230px, 28vw, 320px);
+  min-height: 230px;
+}
+
+.chart-shell.compact {
+  height: clamp(210px, 24vw, 290px);
+  min-height: 210px;
+}
+
+.chart-summary-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin-top: 10px;
+  color: var(--aura-muted);
+  font-size: 0.8rem;
+  font-weight: 780;
+}
+
+.chart-summary-list span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.chart-summary-list i {
+  width: 9px;
+  height: 9px;
+  display: inline-block;
+  border-radius: 999px;
+  box-shadow: 0 0 18px currentColor;
+}
+
+.chart-tooltip {
+  display: grid;
+  gap: 5px;
+  min-width: 140px;
+  padding: 10px 12px;
+  color: var(--aura-text);
+  border: 1px solid var(--aura-border-strong);
+  border-radius: 8px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.035)),
+    rgba(5, 7, 19, 0.96);
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.34), 0 0 32px rgba(25, 200, 255, 0.1);
+  backdrop-filter: blur(16px);
+}
+
+.chart-tooltip strong {
+  color: #ffffff;
+  font-size: 0.82rem;
+}
+
+.chart-tooltip span {
+  color: var(--aura-muted);
+  font-size: 0.78rem;
+  font-weight: 760;
+}
+
+.recharts-wrapper,
+.recharts-surface {
+  outline: none;
+}
+
+.recharts-cartesian-grid line {
+  stroke: rgba(164, 178, 255, 0.16);
+}
+
+.recharts-cartesian-axis-line,
+.recharts-cartesian-axis-tick-line {
+  stroke: rgba(164, 178, 255, 0.2);
+}
+
+.recharts-cartesian-axis-tick-value,
+.recharts-text {
+  fill: var(--aura-muted);
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
 @media (max-width: 1120px) {
   .dashboard-layout {
     min-height: 100vh;
@@ -1313,6 +1533,11 @@ button {
   }
 
   .admin-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .analytics-grid,
+  .student-analytics-grid {
     grid-template-columns: 1fr;
   }
 }
@@ -1420,6 +1645,8 @@ button {
 
   .ledger-header-actions,
   .danger-modal-actions,
+  .profile-identity,
+  .chart-card-header,
   .course-passport-card {
     width: 100%;
     align-items: stretch;
@@ -1434,6 +1661,20 @@ button {
 
   .welcome-banner h2 {
     font-size: 2.3rem !important;
+  }
+
+  .profile-upload-btn {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .profile-form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .chart-shell,
+  .chart-shell.compact {
+    height: 260px;
   }
 }
 

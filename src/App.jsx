@@ -55,7 +55,13 @@ function App() {
           name: profile.name || firebaseUser.displayName || "KNUST User",
           role: profile.role,
           email: profile.email || firebaseUser.email || "",
-          recoveryEmail: profile.recoveryEmail || profile.email || firebaseUser.email || ""
+          recoveryEmail: profile.recoveryEmail || profile.email || firebaseUser.email || "",
+          photoURL: profile.photoURL || firebaseUser.photoURL || "",
+          phone: profile.phone || "",
+          department: profile.department || "",
+          programme: profile.programme || "",
+          level: profile.level || "",
+          bio: profile.bio || ""
         });
       } catch (error) {
         console.error("Failed to restore auth session:", error);
@@ -85,6 +91,10 @@ function App() {
     }
   };
 
+  const handleUserUpdate = (updates) => {
+    setUser(prev => prev ? { ...prev, ...updates } : prev);
+  };
+
   if (loading) {
     return <FullScreenLoader />;
   }
@@ -96,9 +106,9 @@ function App() {
       ) : (
         <Suspense fallback={<FullScreenLoader />}>
           {user.role === 'lecturer' ? (
-            <LecturerDashboard user={user} onLogout={handleLogout} />
+            <LecturerDashboard user={user} onLogout={handleLogout} onUserUpdate={handleUserUpdate} />
           ) : (
-            <StudentDashboard user={user} onLogout={handleLogout} />
+            <StudentDashboard user={user} onLogout={handleLogout} onUserUpdate={handleUserUpdate} />
           )}
         </Suspense>
       )}

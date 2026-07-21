@@ -10,7 +10,20 @@ import {
   where
 } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell,
+  Pie,
+  PieChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis
+} from 'recharts';
 import Scanner from './Scanner';
+import UserProfilePanel from './UserProfilePanel';
 import { getRefinedPosition, requireUsableGpsAccuracy } from '../utils/geolocation';
 
 const MotionDiv = motion.div;
@@ -93,7 +106,28 @@ const protectCsvCell = (value = '') => {
   return `"${safeText.replace(/"/g, '""')}"`;
 };
 
-export default function StudentDashboard({ user, onLogout }) {
+const STUDENT_CHART_COLORS = {
+  Verified: '#35e59f',
+  Pending: '#f6c65b',
+  Denied: '#ff4f7a'
+};
+
+const ChartTooltip = ({ active, payload, label }) => {
+  if (!active || !payload?.length) return null;
+
+  return (
+    <div className="chart-tooltip">
+      {label && <strong>{label}</strong>}
+      {payload.map(item => (
+        <span key={`${item.name}-${item.value}`}>
+          {item.name}: {item.value}
+        </span>
+      ))}
+    </div>
+  );
+};
+
+export default function StudentDashboard({ user, onLogout, onUserUpdate }) {
   const [activeSessions, setActiveSessions] = useState([]);
   const [status, setStatus] = useState('');
   const [error, setError] = useState('');
@@ -186,6 +220,19 @@ export default function StudentDashboard({ user, onLogout }) {
       return matchesStatus && matchesTerm;
     });
   }, [historySearchTerm, historyStatusFilter, studentHistory]);
+  const studentStatusChartData = useMemo(() => ([
+    { name: 'Verified', value: studentSummary.verified || 0 },
+    { name: 'Pending', value: studentSummary.pending || 0 },
+    { name: 'Denied', value: studentSummary.denied || 0 }
+  ]), [studentSummary.denied, studentSummary.pending, studentSummary.verified]);
+  const studentCourseChartData = useMemo(() => (
+    (studentSummary.courses || []).map(course => ({
+      course: course.courseCode,
+      Verified: course.verified || 0,
+      Pending: course.pending || 0,
+      Denied: course.denied || 0
+    }))
+  ), [studentSummary.courses]);
 
   const downloadStudentLedger = () => {
     if (!studentHistory.length) {
@@ -306,6 +353,8 @@ export default function StudentDashboard({ user, onLogout }) {
           <h2>Welcome, <span className="gradient-text">{user.name}</span></h2>
           <p>ID: {studentId}</p>
         </section>
+
+        <UserProfilePanel user={user} onUserUpdate={onUserUpdate} />
 
         <section className="suite-panel">
           <div className="suite-panel-header">
@@ -446,6 +495,60 @@ export default function StudentDashboard({ user, onLogout }) {
               ))}
             </div>
           </section>
+        )}
+
+        {(studentSummary.total || studentSummary.courses?.length > 0) && (
+          <div className="analytics-grid student-analytics-grid">
+            <section className="suite-panel chart-card">
+              <div className="chart-card-header">
+                <div>
+                  <p className="aura-eyebrow">Personal Analytics</p>
+                  <h3>Attendance Status Mix</h3>
+                  <p>Your verified, pending, and denied records across all courses.</p>
+                </div>
+              </div>
+              <div className="chart-shell compact">
+                <ResponsiveContainer width="100%" height={220}>
+                  <PieChart>
+                    <Pie data={studentStatusChartData} dataKey="value" nameKey="name" innerRadius={54} outerRadius={82} paddingAngle={3}>
+                      {studentStatusChartData.map(entry => (
+                        <Cell key={entry.name} fill={STUDENT_CHART_COLORS[entry.name]} />
+                      ))}
+                    </Pie>
+                    <Tooltip content={<ChartTooltip />} />
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
+              <div className="chart-summary-list">
+                {studentStatusChartData.map(item => (
+                  <span key={item.name}><i style={{background: STUDENT_CHART_COLORS[item.name]}} /> {item.name}: {item.value}</span>
+                ))}
+              </div>
+            </section>
+
+            <section className="suite-panel chart-card">
+              <div className="chart-card-header">
+                <div>
+                  <p className="aura-eyebrow">Course Insight</p>
+                  <h3>Course Attendance Counts</h3>
+                  <p>How your attendance is distributed per course.</p>
+                </div>
+              </div>
+              <div className="chart-shell">
+                <ResponsiveContainer width="100%" height={240}>
+                  <BarChart data={studentCourseChartData}>
+                    <CartesianGrid stroke="rgba(164, 178, 255, 0.14)" vertical={false} />
+                    <XAxis dataKey="course" stroke="#aab5d3" tickLine={false} axisLine={false} />
+                    <YAxis stroke="#aab5d3" tickLine={false} axisLine={false} allowDecimals={false} />
+                    <Tooltip content={<ChartTooltip />} />
+                    <Bar dataKey="Verified" fill={STUDENT_CHART_COLORS.Verified} radius={[6, 6, 0, 0]} />
+                    <Bar dataKey="Pending" fill={STUDENT_CHART_COLORS.Pending} radius={[6, 6, 0, 0]} />
+                    <Bar dataKey="Denied" fill={STUDENT_CHART_COLORS.Denied} radius={[6, 6, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </section>
+          </div>
         )}
 
         <section className="suite-panel">

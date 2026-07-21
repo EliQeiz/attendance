@@ -37,8 +37,23 @@ import {
   FileDown
 } from 'lucide-react';
 import { Parser } from '@json2csv/plainjs';
+import {
+  Area,
+  AreaChart,
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell,
+  Pie,
+  PieChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis
+} from 'recharts';
 import { db } from '../firebase';
 import { getRefinedPosition, requireUsableGpsAccuracy, toLocationRecord } from '../utils/geolocation';
+import UserProfilePanel from './UserProfilePanel';
 import {
   collection,
   query,
@@ -381,6 +396,28 @@ const formatMethodLabel = (method = '') => ({
   QR_FALLBACK: 'Legacy Student QR'
 }[method] || method || 'QR Attendance');
 
+const CHART_COLORS = {
+  Verified: '#35e59f',
+  Pending: '#f6c65b',
+  Denied: '#ff4f7a',
+  Absent: '#8b5cf6'
+};
+
+const ChartTooltip = ({ active, payload, label }) => {
+  if (!active || !payload?.length) return null;
+
+  return (
+    <div className="chart-tooltip">
+      {label && <strong>{label}</strong>}
+      {payload.map(item => (
+        <span key={`${item.name}-${item.value}`}>
+          {item.name}: {item.value}
+        </span>
+      ))}
+    </div>
+  );
+};
+
 const deleteSnapshotDocs = async (snapshot) => {
   let batch = writeBatch(db);
   let operationCount = 0;
@@ -410,7 +447,7 @@ const deleteCollectionDocuments = async (collectionReference) => {
   return deleteSnapshotDocs(snapshot);
 };
 
-export default function LecturerDashboard({ user, onLogout }) {
+export default function LecturerDashboard({ user, onLogout, onUserUpdate }) {
   const [courses, setCourses] = useState([]);
   const [attendance, setAttendance] = useState({});
   const [activeCourse, setActiveCourse] = useState(null);
@@ -1778,6 +1815,42 @@ export default function LecturerDashboard({ user, onLogout }) {
   const historyAttendanceRate = historySummary.length
     ? Math.round((verifiedHistoryRows.length / (historySummary.length * WEEKS.length)) * 100)
     : 0;
+  const rosterSize = activeCourse?.rosterCount || courseRoster.length || 0;
+  const liveRecordedIds = useMemo(() => new Set(currentRecords.map(record => record.studentID).filter(Boolean)), [currentRecords]);
+  const liveAbsentCount = Math.max(rosterSize - liveRecordedIds.size, 0);
+  const liveStatusChartData = useMemo(() => ([
+    { name: 'Verified', value: verifiedRecords.length },
+    { name: 'Pending', value: pendingRecords.length },
+    { name: 'Denied', value: deniedRecords.length },
+    { name: 'Absent', value: liveAbsentCount }
+  ]), [deniedRecords.length, liveAbsentCount, pendingRecords.length, verifiedRecords.length]);
+  const semesterTrendData = useMemo(() => (
+    WEEKS.map(week => {
+      const sessionKey = getSessionKey(activeCourse?.code || '', week);
+      const rows = attendance[sessionKey] || historyRows.filter(row => row.week === week);
+      const recordedIds = new Set(rows.map(row => row.studentID).filter(Boolean));
+      const verified = rows.filter(row => (row.status || 'Verified') === 'Verified').length;
+      const pending = rows.filter(row => row.status === 'Pending').length;
+      const denied = rows.filter(row => row.status === 'Denied').length;
+
+      return {
+        week: `W${week}`,
+        Verified: verified,
+        Pending: pending,
+        Denied: denied,
+        Absent: Math.max(rosterSize - recordedIds.size, 0)
+      };
+    })
+  ), [activeCourse?.code, attendance, historyRows, rosterSize]);
+  const topStudentChartData = useMemo(() => (
+    [...historySummary]
+      .sort((a, b) => b.attendedCount - a.attendedCount)
+      .slice(0, 6)
+      .map(student => ({
+        name: (student.fullName || student.studentID).split(/\s+/).slice(0, 2).join(' '),
+        Attended: student.attendedCount || 0
+      }))
+  ), [historySummary]);
   const filteredCourseRoster = useMemo(() => {
     const term = adminSearchTerm.trim().toLowerCase();
     return courseRoster.filter(student => (
@@ -2112,6 +2185,65 @@ export default function LecturerDashboard({ user, onLogout }) {
               </form>
             </div>
 
+            <div className="analytics-grid">
+              <section className="table-card chart-card">
+                <div className="chart-card-header">
+                  <div>
+                    <p className="aura-eyebrow">Live Intelligence</p>
+                    <h3>Session Attendance Mix</h3>
+                    <p>Real-time distribution for Week {currentWeek} as scans and lecturer decisions arrive.</p>
+                  </div>
+                  <span className="status-pill verified">{currentRecords.length} Records</span>
+                </div>
+                <div className="chart-shell compact">
+                  <ResponsiveContainer width="100%" height={230}>
+                    <PieChart>
+                      <Pie data={liveStatusChartData} dataKey="value" nameKey="name" innerRadius={58} outerRadius={88} paddingAngle={3}>
+                        {liveStatusChartData.map(entry => (
+                          <Cell key={entry.name} fill={CHART_COLORS[entry.name]} />
+                        ))}
+                      </Pie>
+                      <Tooltip content={<ChartTooltip />} />
+                    </PieChart>
+                  </ResponsiveContainer>
+                </div>
+                <div className="chart-summary-list">
+                  {liveStatusChartData.map(item => (
+                    <span key={item.name}><i style={{background: CHART_COLORS[item.name]}} /> {item.name}: {item.value}</span>
+                  ))}
+                </div>
+              </section>
+
+              <section className="table-card chart-card">
+                <div className="chart-card-header">
+                  <div>
+                    <p className="aura-eyebrow">Weekly Signal</p>
+                    <h3>Semester Attendance Trend</h3>
+                    <p>Live and loaded history by academic week.</p>
+                  </div>
+                </div>
+                <div className="chart-shell">
+                  <ResponsiveContainer width="100%" height={260}>
+                    <AreaChart data={semesterTrendData}>
+                      <defs>
+                        <linearGradient id="verifiedGradient" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="5%" stopColor={CHART_COLORS.Verified} stopOpacity={0.45} />
+                          <stop offset="95%" stopColor={CHART_COLORS.Verified} stopOpacity={0.02} />
+                        </linearGradient>
+                      </defs>
+                      <CartesianGrid stroke="rgba(164, 178, 255, 0.14)" vertical={false} />
+                      <XAxis dataKey="week" stroke="#aab5d3" tickLine={false} axisLine={false} />
+                      <YAxis stroke="#aab5d3" tickLine={false} axisLine={false} allowDecimals={false} />
+                      <Tooltip content={<ChartTooltip />} />
+                      <Area type="monotone" dataKey="Verified" stroke={CHART_COLORS.Verified} fill="url(#verifiedGradient)" strokeWidth={3} />
+                      <Area type="monotone" dataKey="Pending" stroke={CHART_COLORS.Pending} fill="transparent" strokeWidth={2} />
+                      <Area type="monotone" dataKey="Denied" stroke={CHART_COLORS.Denied} fill="transparent" strokeWidth={2} />
+                    </AreaChart>
+                  </ResponsiveContainer>
+                </div>
+              </section>
+            </div>
+
             <div className="action-row" style={{display: 'flex', gap: '15px', marginBottom: '25px'}}>
               <div className="search-bar" style={{flex: 2, background: 'var(--card-bg)', border: '1px solid var(--border-color)', padding: '0 12px', borderRadius: '12px', display: 'flex', alignItems: 'center', gap: '10px'}}>
                 <Search size={18} color="#94a3b8" />
@@ -2178,6 +2310,52 @@ export default function LecturerDashboard({ user, onLogout }) {
               <div className="stat-card" style={{borderLeft: '5px solid var(--knust-green)'}}><h3>Unique Students</h3><p>{new Set(verifiedHistoryRows.map(s => s.studentID)).size}</p></div>
               <div className="stat-card" style={{borderLeft: '5px solid var(--knust-yellow)'}}><h3>Weeks Recorded</h3><p>{WEEKS.filter(w => attendance[getSessionKey(activeCourse.code, w)]?.length > 0).length}</p></div>
               <div className="stat-card" style={{borderLeft: '5px solid var(--knust-green)'}}><h3>Semester Rate</h3><p>{historyAttendanceRate}%</p></div>
+            </div>
+
+            <div className="analytics-grid">
+              <section className="table-card chart-card">
+                <div className="chart-card-header">
+                  <div>
+                    <p className="aura-eyebrow">Semester Pulse</p>
+                    <h3>Weekly Attendance Quality</h3>
+                    <p>Verified, pending, denied, and absent patterns across the semester.</p>
+                  </div>
+                </div>
+                <div className="chart-shell">
+                  <ResponsiveContainer width="100%" height={280}>
+                    <BarChart data={semesterTrendData}>
+                      <CartesianGrid stroke="rgba(164, 178, 255, 0.14)" vertical={false} />
+                      <XAxis dataKey="week" stroke="#aab5d3" tickLine={false} axisLine={false} />
+                      <YAxis stroke="#aab5d3" tickLine={false} axisLine={false} allowDecimals={false} />
+                      <Tooltip content={<ChartTooltip />} />
+                      <Bar dataKey="Verified" fill={CHART_COLORS.Verified} radius={[6, 6, 0, 0]} />
+                      <Bar dataKey="Pending" fill={CHART_COLORS.Pending} radius={[6, 6, 0, 0]} />
+                      <Bar dataKey="Denied" fill={CHART_COLORS.Denied} radius={[6, 6, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </section>
+
+              <section className="table-card chart-card">
+                <div className="chart-card-header">
+                  <div>
+                    <p className="aura-eyebrow">Student 360</p>
+                    <h3>Top Attendance Counts</h3>
+                    <p>Students with the strongest verified attendance totals for this course.</p>
+                  </div>
+                </div>
+                <div className="chart-shell">
+                  <ResponsiveContainer width="100%" height={280}>
+                    <BarChart data={topStudentChartData} layout="vertical" margin={{ left: 12 }}>
+                      <CartesianGrid stroke="rgba(164, 178, 255, 0.14)" horizontal={false} />
+                      <XAxis type="number" stroke="#aab5d3" tickLine={false} axisLine={false} allowDecimals={false} />
+                      <YAxis type="category" dataKey="name" stroke="#aab5d3" tickLine={false} axisLine={false} width={86} />
+                      <Tooltip content={<ChartTooltip />} />
+                      <Bar dataKey="Attended" fill="#19c8ff" radius={[0, 8, 8, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </section>
             </div>
 
             <div className="table-card">
@@ -2362,6 +2540,10 @@ export default function LecturerDashboard({ user, onLogout }) {
             </div>
 
             <div className="admin-grid">
+              <section className="table-card admin-panel profile-admin-panel">
+                <UserProfilePanel user={user} onUserUpdate={onUserUpdate} />
+              </section>
+
               <section className="table-card admin-panel">
                 <div className="suite-panel-header">
                   <div className="suite-icon"><DatabaseZap size={20} /></div>
