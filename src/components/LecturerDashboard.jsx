@@ -1363,21 +1363,15 @@ export default function LecturerDashboard({ user, onLogout, onUserUpdate }) {
 
     const sessionKey = getSessionKey(activeCourse.code, currentWeek);
     setIsBleBusy(true);
-    setBleStatus('Preparing projected QR session and checking lecturer GPS...');
+    setBleStatus('Preparing projected QR session...');
 
     try {
       const now = new Date();
       const nowMs = Date.now();
       const sessionCode = generateSessionCode();
-      let lecturerLocation = null;
-
-      try {
-        lecturerLocation = toLocationRecord(requireUsableGpsAccuracy(await getRefinedPosition()), nowMs);
-      } catch (locationError) {
-        console.warn('Lecturer GPS unavailable; scan-only pending path will remain available:', locationError);
-      }
-
-      await setDoc(doc(db, "attendance", sessionKey), {
+      const sessionRef = doc(db, "attendance", sessionKey);
+      const secureRef = doc(db, "attendance", sessionKey, "secure", "state");
+      const publicSessionData = {
         active: true,
         courseCode: normalizeCourseCode(activeCourse.code),
         courseName: activeCourse.name,
@@ -1391,14 +1385,14 @@ export default function LecturerDashboard({ user, onLogout, onUserUpdate }) {
         verificationMode: "QR_GPS_OR_APPROVAL",
         sessionKey,
         locationThresholdMeters: QR_DISTANCE_METERS,
-        lecturerLocationReady: Boolean(lecturerLocation),
+        lecturerLocationReady: false,
         startedAt: serverTimestamp(),
         startedAtIso: now.toISOString(),
         sessionDate: now.toLocaleDateString(),
         endedAt: null,
         qrGeneratedAt: serverTimestamp(),
         locationUpdatedAt: serverTimestamp()
-      }, { merge: true });
+      };
 
       const secureState = {
         sessionCode,
@@ -1407,22 +1401,55 @@ export default function LecturerDashboard({ user, onLogout, onUserUpdate }) {
         updatedAt: serverTimestamp()
       };
 
-      if (lecturerLocation) {
-        secureState.lecturerLocation = lecturerLocation;
-      }
+      // Write the secure QR code before making the public session active.
+      // That prevents the projection card from sitting on "Preparing QR..."
+      // while the browser is still negotiating location permission.
+      await setDoc(sessionRef, {
+        ...publicSessionData,
+        active: false,
+        qrPreparing: true
+      }, { merge: true });
+      await setDoc(secureRef, secureState, { merge: true });
+      await setDoc(sessionRef, {
+        ...publicSessionData,
+        active: true,
+        qrPreparing: false
+      }, { merge: true });
 
-      await setDoc(doc(db, "attendance", sessionKey, "secure", "state"), secureState, { merge: true });
+      setSessionSecret(prev => ({ ...prev, sessionCode, locationThresholdMeters: QR_DISTANCE_METERS, qrIssuedAtMs: nowMs }));
+      setActiveSession(prev => ({ ...prev, ...publicSessionData, active: true, qrPreparing: false }));
+      setBleStatus(`QR is ready for projection. GPS auto-verification is being prepared; scan-only approvals are already available.`);
 
-      setBleStatus(lecturerLocation
-        ? `Session active. Project the QR code. GPS auto-verification is enabled within ${QR_DISTANCE_METERS}m.`
-        : 'Session active. Project the QR code. Lecturer GPS was unavailable, so student scans will require lecturer approval.'
-      );
+      void (async () => {
+        try {
+          const lecturerLocation = toLocationRecord(
+            requireUsableGpsAccuracy(await getRefinedPosition({ maxWaitMs: 8000, targetAccuracyMeters: 80 })),
+            Date.now()
+          );
+          const latestSession = await getDoc(sessionRef);
+          if (!latestSession.exists() || !latestSession.data()?.active) return;
+
+          await setDoc(secureRef, {
+            lecturerLocation,
+            locationUpdatedAt: serverTimestamp(),
+            updatedAt: serverTimestamp()
+          }, { merge: true });
+          await setDoc(sessionRef, {
+            lecturerLocationReady: true,
+            locationUpdatedAt: serverTimestamp()
+          }, { merge: true });
+          setSessionSecret(prev => ({ ...prev, lecturerLocation }));
+          setBleStatus(`Session active. Project the QR code. GPS auto-verification is enabled within ${QR_DISTANCE_METERS}m.`);
+        } catch (locationError) {
+          console.warn('Lecturer GPS unavailable; scan-only pending path will remain available:', locationError);
+          const latestSession = await getDoc(sessionRef).catch(() => null);
+          if (!latestSession?.exists() || !latestSession.data()?.active) return;
+          setBleStatus('QR is ready for projection. Lecturer GPS is unavailable, so GPS scans may wait briefly or students can use scan-only approval.');
+        }
+      })();
     } catch (error) {
       console.error("Unable to start QR session:", error);
-      setBleStatus(error?.code === 1
-        ? 'Location permission was blocked. You can retry, or continue with scan-only approvals if the session started.'
-        : error.message || 'Unable to start QR attendance session. Please check Firebase permissions.'
-      );
+      setBleStatus(error.message || 'Unable to start QR attendance session. Please check Firebase permissions.');
     } finally {
       setIsBleBusy(false);
     }

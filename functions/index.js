@@ -6,6 +6,7 @@ initializeApp();
 const db = getFirestore();
 
 const REGION = 'us-central1';
+const CALLABLE_OPTIONS = { region: REGION, invoker: 'public' };
 const DEFAULT_THRESHOLD_METERS = 150;
 const MAX_ACCEPTABLE_ACCURACY_METERS = 150;
 const EARTH_RADIUS_METERS = 6371000;
@@ -41,6 +42,35 @@ const toDisplayDate = (value) => {
   return millis ? new Date(millis).toLocaleString() : '';
 };
 
+const loadStudentRecordDocs = async (studentId) => {
+  try {
+    const snapshot = await db
+      .collectionGroup('records')
+      .where('studentID', '==', studentId)
+      .limit(120)
+      .get();
+
+    return snapshot.docs;
+  } catch (error) {
+    const details = `${error?.message || ''} ${error?.details || ''}`.toLowerCase();
+    const indexIsMissingOrBuilding = error?.code === 9
+      && (details.includes('index') || details.includes('failed_precondition'));
+
+    if (!indexIsMissingOrBuilding) {
+      throw error;
+    }
+
+    console.warn(`records.studentID collection-group index is not ready; using exact record lookup fallback for ${studentId}.`);
+
+    const sessionsSnapshot = await db.collection('attendance').limit(500).get();
+    const recordSnapshots = await Promise.all(
+      sessionsSnapshot.docs.map((sessionDoc) => sessionDoc.ref.collection('records').doc(studentId).get())
+    );
+
+    return recordSnapshots.filter((recordDoc) => recordDoc.exists).slice(0, 120);
+  }
+};
+
 /**
  * Server-authoritative attendance verification.
  *
@@ -50,7 +80,7 @@ const toDisplayDate = (value) => {
  * the public active-session document. GPS submissions become Verified when
  * within range. Scan-only submissions become Pending for lecturer approval.
  */
-export const submitAttendance = onCall({ region: REGION }, async (request) => {
+export const submitAttendance = onCall(CALLABLE_OPTIONS, async (request) => {
   if (!request.auth) {
     throw new HttpsError('unauthenticated', 'Sign in to verify attendance.');
   }
@@ -224,7 +254,7 @@ export const submitAttendance = onCall({ region: REGION }, async (request) => {
   };
 });
 
-export const getStudentAttendanceHistory = onCall({ region: REGION }, async (request) => {
+export const getStudentAttendanceHistory = onCall(CALLABLE_OPTIONS, async (request) => {
   if (!request.auth) {
     throw new HttpsError('unauthenticated', 'Sign in to view attendance history.');
   }
@@ -240,13 +270,9 @@ export const getStudentAttendanceHistory = onCall({ region: REGION }, async (req
     throw new HttpsError('failed-precondition', 'Your account has no student ID on file.');
   }
 
-  const snapshot = await db
-    .collectionGroup('records')
-    .where('studentID', '==', studentId)
-    .limit(120)
-    .get();
+  const recordDocs = await loadStudentRecordDocs(studentId);
 
-  const records = snapshot.docs.map((recordDoc) => {
+  const records = recordDocs.map((recordDoc) => {
     const record = recordDoc.data();
     const sessionRef = recordDoc.ref.parent.parent;
     const timestampMs = toDateMillis(record.verifiedAt || record.pendingAt || record.timestamp || record.verifiedAtIso || record.pendingAtIso);
